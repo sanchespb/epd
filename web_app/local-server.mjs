@@ -145,6 +145,13 @@ const xmlDecode=value=>String(value||"").replace(/&quot;/g,'"').replace(/&apos;/
 const xmlAttribute=(xml,name)=>{const match=String(xml||"").match(new RegExp(`${name}=["']([^"']*)["']`,"i"));return xmlDecode(match?.[1]||"").trim();};
 const xmlSection=(xml,tag)=>{const match=String(xml||"").match(new RegExp(`<${tag}(?=\\s|/?>)[^>]*>[\\s\\S]*?<\\/${tag}>|<${tag}(?=\\s|/?>)[^>]*/>`,"i"));return match?.[0]||"";};
 const xmlParty=(xml,tag)=>xmlAttribute(xmlSection(xml,tag),"НаимОрг")||"Не указано";
+const forwardingServiceCost=xml=>{
+  const source=String(xml||"");
+  const names=["СтоимУслуг","СтУслуг","СтУслЭксп","СуммаУслуг","ServiceCost","ServicePrice","Cost"];
+  for(const name of names){const value=xmlAttribute(source,name);if(value)return value;}
+  const labeled=source.match(/(?:Стоимость|стоимость)[^<>="']{0,80}[=:]\s*["']?([\d\s]+(?:[.,]\d{1,2})?)/u);
+  return labeled?.[1]?.trim()||"";
+};
 const ticksToDate=ticks=>{if(!ticks)return null;const value=Number(ticks);return Number.isFinite(value)?new Date(value/10_000-62135596800000):null;};
 const documentDate=value=>{const match=String(value||"").match(/^(\d{2})\.(\d{2})\.(\d{4})$/);return match?new Date(`${match[3]}-${match[2]}-${match[1]}T00:00:00+03:00`):null;};
 const addHours=(date,hours)=>date?new Date(date.getTime()+hours*3_600_000):null;
@@ -219,22 +226,23 @@ async function loadSigningControl(){
   const docflows=[];for(let offset=0;offset<unique.length;offset+=100){const part=unique.slice(offset,offset+100);const response=await diadocJson(`/V5/GetDocflows?boxId=${encodeURIComponent(config.boxId)}`,accessToken,{method:"POST",body:JSON.stringify({Requests:part.map(item=>({DocumentId:{MessageId:item.MessageId,EntityId:item.EntityId}}))})});docflows.push(...(response.Documents||[]));}
   const flowById=new Map(docflows.map(item=>[`${item.DocumentId?.MessageId}:${item.DocumentId?.EntityId}`,item]));
   const items=(await mapLimit(unique,5,async document=>{
-    const flow=flowById.get(`${document.MessageId}:${document.EntityId}`);if(flow?.DocumentInfo?.IsDeleted)return [];const isForwarding=document.TypeNamedId==="LogisticsForwardingOrder";const waiting=(flow?.Docflow?.Titles||[]).filter(title=>title.AuthorSigning&&title.AuthorSigning.IsFinished===false&&title.AuthorSigning.Status==="TitleAuthorStatusWaiting").filter(title=>!isForwarding||Number(title.TitleIndex||0)<2);if(!waiting.length)return [];
+    const flow=flowById.get(`${document.MessageId}:${document.EntityId}`);if(flow?.DocumentInfo?.IsDeleted)return [];const isForwarding=document.TypeNamedId==="LogisticsForwardingOrder";const titles=flow?.Docflow?.Titles||[];const waiting=titles.filter(title=>title.AuthorSigning&&title.AuthorSigning.IsFinished===false&&title.AuthorSigning.Status==="TitleAuthorStatusWaiting").filter(title=>!isForwarding||Number(title.TitleIndex||0)<2);const forwardingAgreed=isForwarding&&!document.IsIncoming&&!waiting.length&&titles.some(title=>Number(title.TitleIndex||0)===1&&title.AuthorSigning?.IsFinished===true);if(!waiting.length&&!forwardingAgreed)return [];
     const customData=Object.fromEntries((document.CustomData||[]).map(item=>[item.Key,item.Value]));
     const initialParts=String(customData["kl-initial-document-id"]||"").split(":");
     const sourceMessageId=initialParts.length===3?initialParts[1]:document.MessageId;
     const sourceEntityId=initialParts.length===3?initialParts[2]:document.EntityId;
     let xml="";try{xml=await diadocEntityText(accessToken,config.boxId,sourceMessageId,sourceEntityId);}catch{try{xml=await diadocEntityText(accessToken,config.boxId,document.MessageId,document.EntityId);}catch{/* metadata remains available */}}
     const isOrder=document.TypeNamedId==="LogisticsOrderRequest";const container=(xml.match(/[A-Z]{4}\d{7}/)||[])[0]||"—";const firstParty=(...tags)=>tags.map(tag=>xmlParty(xml,tag)).find(value=>value!=="Не указано")||"Не указано";const client=isForwarding?firstParty("СвКл","СвЗакТЭУ","СвЗак"):xmlParty(xml,"СвЗак");const carrier=isForwarding?firstParty("СвЭксп","СвИсп","СвПер"):(xmlParty(xml,"СвПер")!=="Не указано"?xmlParty(xml,"СвПер"):xmlParty(xml,"СвИсп"));const consignee=isForwarding?"—":xmlParty(xml,"СвГП");
-    return waiting.map(title=>{const titleNumber=Number(title.TitleIndex||0)+1;let controlDate=null;let controlDateLabel="Дата документа";
+    const trackedTitles=forwardingAgreed?[{TitleIndex:1,agreed:true}]:waiting;const serviceCost=isForwarding?forwardingServiceCost(xml):"";
+    return trackedTitles.map(title=>{const titleNumber=Number(title.TitleIndex||0)+1;let controlDate=null;let controlDateLabel="Дата документа";
       if(isForwarding){controlDate=addHours(documentDate(document.DocumentDate)||new Date(document.CreationTimestamp||Date.now()),Number(process.env.KONTUR_FORWARDING_RESPONSE_HOURS||24));controlDateLabel=document.IsIncoming?"Срок нашей подписи":"Срок подписи экспедитора";}
       else if(isOrder){controlDate=addHours(documentDate(document.DocumentDate)||new Date(document.CreationTimestamp||Date.now()),Number(process.env.KONTUR_ORDER_RESPONSE_HOURS||24));controlDateLabel="Срок ответа перевозчика";}
       else if(titleNumber===2){controlDate=new Date(xmlAttribute(xml,"ЗаявПогр")||xmlAttribute(xml,"StatedArrivalDateTime")||"");controlDateLabel="Плановая подача ТС под погрузку";}
       else if(titleNumber===3){controlDate=new Date(xmlAttribute(xml,"ДатВрДостГр")||xmlAttribute(xml,"DeliveryDateTime")||"");controlDateLabel="Плановая доставка груза";}
       else if(titleNumber===4){controlDate=new Date(xmlAttribute(xml,"ФДатВрУбыт")||xmlAttribute(xml,"ActualDepartureDateTime")||xmlAttribute(xml,"ФДатВрПриб")||"");controlDateLabel="Фактическое завершение выгрузки";}
       if(!controlDate||Number.isNaN(controlDate.getTime()))controlDate=documentDate(document.DocumentDate)||ticksToDate(document.SendTimestampTicks)||new Date(document.CreationTimestamp||Date.now());const delay=describeDelay(controlDate);
-      const responsible=isForwarding?(document.IsIncoming?"Мы":"Экспедитор"):titleNumber===3?"Грузополучатель":titleNumber===1?"Грузоотправитель":"Перевозчик";
-      return {id:`${document.MessageId}:${document.EntityId}:${titleNumber}`,documentType:isForwarding?"Поручение экспедитору":isOrder?"Заявка":"ЭТрН",workflowGroup:isForwarding?(document.IsIncoming?"signByUs":"waitingCounterparty"):null,number:document.DocumentNumber||xmlAttribute(xml,isForwarding?"НомДок":isOrder?"НомерЗаяв":"НомерТрН")||"Без номера",container,client,carrier,consignee,waitingTitle:`Т${titleNumber}`,responsible,status:delay.status,statusText:isForwarding&&document.IsIncoming?"Требуется наша подпись":`Ожидается подпись: ${responsible.toLowerCase()}`,controlDate:controlDate.toISOString(),controlDateLabel,overdueText:delay.text,messageId:document.MessageId,entityId:document.EntityId,documentUrl:konturDocumentUrl(config.boxId,document.MessageId,customData["kl-id"]||sourceEntityId,document.TypeNamedId)};});
+      const agreed=Boolean(title.agreed);const responsible=isForwarding?(document.IsIncoming?"Мы":"Экспедитор"):titleNumber===3?"Грузополучатель":titleNumber===1?"Грузоотправитель":"Перевозчик";
+      return {id:`${document.MessageId}:${document.EntityId}:${titleNumber}`,documentType:isForwarding?"Поручение экспедитору":isOrder?"Заявка":"ЭТрН",workflowGroup:isForwarding?(document.IsIncoming?"incoming":"outgoing"):null,direction:isForwarding?(document.IsIncoming?"incoming":"outgoing"):null,agreed,serviceCost,number:document.DocumentNumber||xmlAttribute(xml,isForwarding?"НомДок":isOrder?"НомерЗаяв":"НомерТрН")||"Без номера",container,client,carrier,consignee,waitingTitle:agreed?"Согласовано":`Т${titleNumber}`,responsible,status:agreed?"agreed":delay.status,statusText:agreed?"Подписано экспедитором":isForwarding&&document.IsIncoming?"Требуется наша подпись":`Ожидается подпись: ${responsible.toLowerCase()}`,controlDate:controlDate.toISOString(),controlDateLabel,overdueText:agreed?"Согласовано":delay.text,messageId:document.MessageId,entityId:document.EntityId,documentUrl:konturDocumentUrl(config.boxId,document.MessageId,customData["kl-id"]||sourceEntityId,document.TypeNamedId)};});
   })).flat();
   return {source:"kontur",generatedAt:new Date().toISOString(),connected:true,user:konturUserInfo(loadKonturTokens()),items,note:null};
 }

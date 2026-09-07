@@ -1,17 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import styles from "./control.module.css";
+import baseStyles from "./control.module.css";
+import groupStyles from "./control-groups.module.css";
 import appPackage from "../../package.json";
 
 type ControlItem={
-  id:string;documentType:"ЭТрН"|"Заявка"|"Поручение экспедитору";workflowGroup:"signByUs"|"waitingCounterparty"|null;number:string;container:string;client:string;carrier:string;consignee:string;
-  waitingTitle:string;responsible:string;status:"overdue"|"dueSoon"|"waiting";statusText:string;controlDate:string;controlDateLabel:string;
+  id:string;documentType:"ЭТрН"|"Заявка"|"Поручение экспедитору";workflowGroup:"incoming"|"outgoing"|null;direction:"incoming"|"outgoing"|null;agreed:boolean;serviceCost:string;number:string;container:string;client:string;carrier:string;consignee:string;
+  waitingTitle:string;responsible:string;status:"overdue"|"dueSoon"|"waiting"|"agreed";statusText:string;controlDate:string;controlDateLabel:string;
   overdueText:string;messageId:string;entityId:string;documentUrl:string|null;
 };
 type ControlResponse={source:"kontur";generatedAt:string;connected:boolean;user:{name:string;email:string}|null;items:ControlItem[];note?:string};
 
 const formatDate=(value:string)=>new Intl.DateTimeFormat("ru-RU",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"}).format(new Date(value));
+const styles={...baseStyles,...groupStyles};
 
 export default function ControlPage(){
   const [data,setData]=useState<ControlResponse|null>(null);
@@ -26,10 +28,9 @@ export default function ControlPage(){
   const etrn=data?.items.filter(item=>item.documentType==="ЭТрН").length||0;
   const orders=data?.items.filter(item=>item.documentType==="Заявка").length||0;
   const forwarding=data?.items.filter(item=>item.documentType==="Поручение экспедитору")||[];
-  const signByUs=forwarding.filter(item=>item.workflowGroup==="signByUs").length;
-  const waitingCounterparty=forwarding.filter(item=>item.workflowGroup==="waitingCounterparty").length;
-  const regularItems=items.filter(item=>item.documentType!=="Поручение экспедитору");
-  const forwardingItems=items.filter(item=>item.documentType==="Поручение экспедитору");
+  const incoming=forwarding.filter(item=>item.direction==="incoming").length;
+  const outgoing=forwarding.filter(item=>item.direction==="outgoing").length;
+  const clientGroups=useMemo(()=>Object.entries(items.reduce<Record<string,ControlItem[]>>((groups,item)=>{const key=item.client&&item.client!=="Не указано"?item.client:"Клиент не определён";(groups[key]??=[]).push(item);return groups;},{})).sort(([a],[b])=>a.localeCompare(b,"ru")),[items]);
   return <main className={styles.shell}>
     <header className={styles.topbar}><div className={styles.logo}>А</div><div><strong>Создание ЭПД</strong><span>версия {appPackage.version}</span></div><nav><a href="/workspace">Создание документов</a><a className={styles.activeTab} href="/control">Контроль подписания</a></nav><i/><b>{data?.connected?"Контур подключён":"Предварительный режим"}</b></header>
     <section className={styles.content}>
@@ -40,22 +41,12 @@ export default function ControlPage(){
         <button className={filter==="overdue"?styles.selected:""} onClick={()=>setFilter("overdue")}><span>Просрочено</span><strong>{overdue}</strong><small>требуют внимания</small></button>
         <button className={filter==="etrn"?styles.selected:""} onClick={()=>setFilter("etrn")}><span>ЭТрН</span><strong>{etrn}</strong><small>ожидают титулы</small></button>
         <button className={filter==="order"?styles.selected:""} onClick={()=>setFilter("order")}><span>Заявки</span><strong>{orders}</strong><small>ожидают подпись</small></button>
-        <button className={filter==="forwarding"?styles.selected:""} onClick={()=>setFilter("forwarding")}><span>Поручения</span><strong>{forwarding.length}</strong><small>{signByUs} нам · {waitingCounterparty} контрагенту</small></button>
+        <button className={filter==="forwarding"?styles.selected:""} onClick={()=>setFilter("forwarding")}><span>Поручения</span><strong>{forwarding.length}</strong><small>{outgoing} отправили · {incoming} получили</small></button>
       </section>
       <section className={styles.panel}>
         <div className={styles.panelTitle}><div><strong>Документы в работе</strong><small>{data?`Проверено ${formatDate(data.generatedAt)}`:"Получаем данные…"}</small></div><label style={{position:"relative",width:"min(390px, 100%)",display:"flex",flexDirection:"column",gap:4}}><span style={{color:"#718087",fontSize:10,fontWeight:800}}>Поиск</span><input style={{width:"100%",height:40,padding:"0 40px 0 12px",border:"1px solid #295d7240",borderRadius:10,background:"#fff",color:"#152631",font:"inherit"}} value={query} onChange={event=>setQuery(event.target.value)} placeholder="Контейнер, клиент или перевозчик"/>{query&&<button style={{position:"absolute",right:5,bottom:5,width:30,height:30,border:0,borderRadius:8,background:"#eef2f3",color:"#295d72",fontSize:18,cursor:"pointer"}} onClick={()=>setQuery("")} aria-label="Очистить поиск">×</button>}</label><span>{data?.user?.name?`Авторизация: ${data.user.name}`:"Контур не авторизован"}</span></div>
-        <div className={styles.tableWrap}><table><thead><tr><th>Документ</th><th>Контейнер</th><th>Заказчик (клиент)</th><th>Грузополучатель</th><th>Перевозчик</th><th style={{whiteSpace:"nowrap",minWidth:100}}>Ожидается</th><th>Контрольная дата</th><th>Статус</th><th>Документ</th></tr></thead><tbody>
-          {!loading&&regularItems.map(item=><tr key={item.id}><td><b>{item.documentType}</b><strong>{item.number}</strong><small>{item.messageId}</small></td><td><strong>{item.container}</strong></td><td>{item.client}</td><td>{item.consignee}</td><td>{item.carrier}</td><td><b className={styles.titleBadge}>{item.waitingTitle}</b></td><td><strong>{formatDate(item.controlDate)}</strong><small>{item.controlDateLabel}</small></td><td><span className={styles[item.status]}><b>{item.overdueText}</b><small>{item.statusText}</small></span></td><td>{item.documentUrl?<a href={item.documentUrl} target="_blank" rel="noreferrer">Открыть в Контуре ↗</a>:<button disabled title="Нужен шаблон URL карточки документа из вашего ЛК">Нужен URL из ЛК</button>}</td></tr>)}
-          {!loading&&!regularItems.length&&<tr><td colSpan={9} className={styles.empty}>По выбранному фильтру документов нет</td></tr>}
-        </tbody></table></div>
+        <div className={styles.clientGroups}>{!loading&&clientGroups.map(([client,clientItems])=><details className={styles.clientGroup} key={client} open={clientGroups.length===1}><summary><span><strong>{client}</strong><small>{clientItems.length} документов · {clientItems.filter(item=>item.status==="overdue").length} просрочено</small></span><b>{clientItems.length}</b></summary><div className={styles.tableWrap}><table><thead><tr><th>Документ</th><th>Контейнер</th><th>Грузополучатель / перевозчик</th>{filter==="forwarding"&&<th>Направление</th>}{filter==="forwarding"&&<th>Стоимость услуг</th>}<th>Ожидается</th><th>Контрольная дата</th><th>Статус</th><th>Документ</th></tr></thead><tbody>{clientItems.map(item=><tr key={item.id}><td><b>{item.documentType}</b><strong>{item.number}</strong><small>{item.messageId}</small></td><td><strong>{item.container}</strong></td><td>{item.documentType==="Поручение экспедитору"?item.carrier:item.consignee}<small>{item.carrier}</small></td>{filter==="forwarding"&&<td><b className={styles.titleBadge}>{item.direction==="incoming"?"Получили":"Отправили"}</b></td>}{filter==="forwarding"&&<td><strong className={item.serviceCost?undefined:styles.missingCost}>{item.serviceCost||"Не указана"}</strong>{item.agreed&&<small>Согласована</small>}</td>}<td><b className={styles.titleBadge}>{item.waitingTitle}</b></td><td><strong>{formatDate(item.controlDate)}</strong><small>{item.controlDateLabel}</small></td><td><span className={styles[item.status]}><b>{item.overdueText}</b><small>{item.statusText}</small></span></td><td>{item.documentUrl?<a href={item.documentUrl} target="_blank" rel="noreferrer">Открыть в Контуре ↗</a>:<button disabled>Ссылка недоступна</button>}</td></tr>)}</tbody></table></div></details>)}{!loading&&!clientGroups.length&&<div className={styles.empty}>По выбранному фильтру документов нет</div>}</div>
       </section>
-      {(filter==="all"||filter==="overdue"||filter==="forwarding")&&<section className={styles.panel} style={{marginTop:18}}>
-        <div className={styles.panelTitle}><div><strong>Поручения экспедитору</strong><small>Подписать нам: {signByUs} · отправлены и ожидают подписи: {waitingCounterparty}</small></div></div>
-        <div className={styles.tableWrap}><table><thead><tr><th>Поручение</th><th>Контейнер</th><th>Заказчик</th><th>Экспедитор</th><th>Очередь</th><th>Ожидается</th><th>Контрольная дата</th><th>Статус</th><th>Документ</th></tr></thead><tbody>
-          {!loading&&forwardingItems.map(item=><tr key={item.id}><td><b>{item.documentType}</b><strong>{item.number}</strong><small>{item.messageId}</small></td><td><strong>{item.container}</strong></td><td>{item.client}</td><td>{item.carrier}</td><td><b className={styles.titleBadge}>{item.workflowGroup==="signByUs"?"Подписать нам":"Ждём контрагента"}</b></td><td><b className={styles.titleBadge}>{item.waitingTitle}</b></td><td><strong>{formatDate(item.controlDate)}</strong><small>{item.controlDateLabel}</small></td><td><span className={styles[item.status]}><b>{item.overdueText}</b><small>{item.statusText}</small></span></td><td>{item.documentUrl?<a href={item.documentUrl} target="_blank" rel="noreferrer">Открыть в Контуре ↗</a>:<button disabled>Ссылка недоступна</button>}</td></tr>)}
-          {!loading&&!forwardingItems.length&&<tr><td colSpan={9} className={styles.empty}>Неподписанных поручений в этой группе нет</td></tr>}
-        </tbody></table></div>
-      </section>}
     </section>
   </main>;
 }

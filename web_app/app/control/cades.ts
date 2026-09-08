@@ -5,6 +5,7 @@ type CadesPlugin={
   CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED:number;
   CADESCOM_BASE64_TO_BINARY:number;
   CADESCOM_CADES_BES:number;
+  then?:(resolve:()=>void,reject:(error:unknown)=>void)=>void;
 };
 
 declare global { interface Window { cadesplugin?:CadesPlugin } }
@@ -13,10 +14,12 @@ export type CertificateOption={thumbprint:string;subject:string;validFrom:string
 
 const pluginUrl="https://www.cryptopro.ru/sites/default/files/products/cades/cadesplugin_api.js";
 export async function loadCadesPlugin(){
-  if(window.cadesplugin)return window.cadesplugin;
-  await new Promise<void>((resolve,reject)=>{const existing=document.querySelector<HTMLScriptElement>(`script[src="${pluginUrl}"]`);if(existing){existing.addEventListener("load",()=>resolve(),{once:true});existing.addEventListener("error",()=>reject(new Error("Не удалось загрузить модуль КриптоПро")),{once:true});return;}const script=document.createElement("script");script.src=pluginUrl;script.onload=()=>resolve();script.onerror=()=>reject(new Error("Не удалось загрузить модуль КриптоПро"));document.head.appendChild(script);});
-  if(!window.cadesplugin)throw new Error("Установите КриптоПро ЭЦП Browser plug-in и его расширение для браузера");
-  return window.cadesplugin;
+  if(!window.cadesplugin)await new Promise<void>((resolve,reject)=>{const existing=document.querySelector<HTMLScriptElement>(`script[src="${pluginUrl}"]`);if(existing){existing.addEventListener("load",()=>resolve(),{once:true});existing.addEventListener("error",()=>reject(new Error("Не удалось загрузить модуль КриптоПро")),{once:true});return;}const script=document.createElement("script");script.src=pluginUrl;script.onload=()=>resolve();script.onerror=()=>reject(new Error("Не удалось загрузить модуль КриптоПро"));document.head.appendChild(script);});
+  const bridge=window.cadesplugin;
+  if(!bridge)throw new Error("Установите КриптоПро ЭЦП Browser plug-in и его расширение для браузера");
+  if(typeof bridge.then==="function")await new Promise<void>((resolve,reject)=>bridge.then?.(resolve,reject));
+  if(typeof bridge.CreateObjectAsync!=="function")throw new Error("КриптоПро загружен, но расширение браузера не отвечает");
+  return {CreateObjectAsync:bridge.CreateObjectAsync.bind(bridge),CAPICOM_CURRENT_USER_STORE:bridge.CAPICOM_CURRENT_USER_STORE,CAPICOM_MY_STORE:bridge.CAPICOM_MY_STORE,CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED:bridge.CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED,CADESCOM_BASE64_TO_BINARY:bridge.CADESCOM_BASE64_TO_BINARY,CADESCOM_CADES_BES:bridge.CADESCOM_CADES_BES};
 }
 
 async function openStore(plugin:CadesPlugin){const store=await plugin.CreateObjectAsync("CAdESCOM.Store");await store.Open(plugin.CAPICOM_CURRENT_USER_STORE,plugin.CAPICOM_MY_STORE,plugin.CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED);return store;}

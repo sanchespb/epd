@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from address_xml import known_gar, complete_gar
 from data_sources import Catalogs
-from xml_generator import Generator, TAGLEX, address_attributes, _set_address
+from xml_generator import Generator, TAGLEX, address_attributes, _set_address, _set_contract
 
 
 class AddressRegressions(unittest.TestCase):
@@ -46,6 +46,23 @@ class AddressRegressions(unittest.TestCase):
         self.assertEqual(ctx['carrier']['kpp'], '123456789')
         catalogs.edo.append({**catalogs.edo[0], 'КПП': '987654321'})
         self.assertEqual(catalogs.kpp_for_edo('5321027613', 'selected'), '')
+
+    def test_contract_parties_are_replaced(self):
+        customer = ET.fromstring(
+            '<СвЗак><ДогУслПер><ИдРекСост><ИННЮЛ>5047295775</ИННЮЛ></ИдРекСост></ДогУслПер></СвЗак>'
+        )
+        _set_contract(
+            customer,
+            {'title': 'Договор', 'number': 'KC&TAGLEX', 'date': '2024-08-01'},
+            (TAGLEX['inn'], '7709222373'),
+        )
+        contract = customer.find('ДогУслПер')
+        self.assertEqual(contract.get('НомерДок'), 'KC&TAGLEX')
+        self.assertEqual(contract.get('ДатаДок'), '01.08.2024')
+        self.assertEqual(
+            [item.text for item in contract.findall('ИдРекСост/ИННЮЛ')],
+            ['7734515704', '7709222373'],
+        )
 
 
 if __name__ == '__main__':

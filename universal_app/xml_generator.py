@@ -305,7 +305,7 @@ def _set_ezz_shipper_phone(node: ET.Element | None, phone_value: str):
     phone.text = clean(phone_value)
 
 
-def _set_contract(node: ET.Element | None, contract: dict | None):
+def _set_contract(node: ET.Element | None, contract: dict | None, party_inns: tuple[str, ...] = ()):
     if node is None:
         return
     existing = node.find("ДогУслПер")
@@ -315,6 +315,11 @@ def _set_contract(node: ET.Element | None, contract: dict | None):
         return
     if existing is None:
         existing = ET.SubElement(node, "ДогУслПер")
+    for stale in list(existing.findall("ИдРекСост")):
+        existing.remove(stale)
+    for inn in party_inns:
+        if clean(inn):
+            ET.SubElement(ET.SubElement(existing, "ИдРекСост"), "ИННЮЛ").text = clean(inn)
     existing.set("НаимДок", clean(contract.get("title")) or "Договор")
     existing.set("НомерДок", clean(contract.get("number")))
     raw_date = clean(contract.get("date"))
@@ -533,7 +538,7 @@ class Generator:
         info.set("ДатаЗак", ctx["order_date"])
         _set_legal(info.find("СвГО"), TAGLEX)
         _set_legal(info.find("СвЗак"), ctx["client"])
-        _set_contract(info.find("СвЗак"), ctx.get("client_contract"))
+        _set_contract(info.find("СвЗак"), ctx.get("client_contract"), (TAGLEX["inn"], ctx["client"]["inn"]))
         _set_legal(info.find("СвГП"), consignee)
         delivery = (
             clean((ctx["stock"] or {}).get("Адрес на русском языке") or (ctx["stock"] or {}).get("Адрес"))

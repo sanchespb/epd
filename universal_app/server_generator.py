@@ -1,6 +1,8 @@
 from pathlib import Path
+import uuid
+import xml.etree.ElementTree as ET
 
-from xml_generator import Generator as BaseGenerator
+from xml_generator import Generator as BaseGenerator, TAGLEX, address_attributes
 
 
 class Generator(BaseGenerator):
@@ -80,4 +82,63 @@ class Generator(BaseGenerator):
     def ezz(self, ctx):
         self._validate(ctx, ezz=True)
         return super().ezz(ctx)
+
+    @staticmethod
+    def forwarding_order_userdata(contexts, signer_name):
+        if isinstance(contexts, dict):
+            contexts = [contexts]
+        ctx = contexts[0]
+        def org(parent, data, edo=""):
+            details = ET.SubElement(parent, "OrganizationDetails", {
+                "OrgType":"2", "OrgName":data.get("name") or "Не указано", "Inn":data.get("inn") or "",
+                **({"Kpp":data.get("kpp")} if data.get("kpp") else {}),
+                **({"FnsParticipantId":edo} if edo else {}),
+            })
+            attrs = address_attributes(data.get("address") or "")
+            mapped = {"Индекс":"ZipCode","КодРегион":"Region","Город":"City","НаселПункт":"Settlement","Улица":"Street","Дом":"Building","Корпус":"Block"}
+            address = ET.SubElement(details, "Address")
+            ET.SubElement(address, "RussianAddress", {mapped[key]:value for key,value in attrs.items() if key in mapped and value})
+
+        parts = signer_name.split()
+        if len(parts) < 2:
+            raise ValueError("укажите фамилию и имя подписанта клиента")
+        contract = ctx.get("client_contract")
+        if not contract:
+            raise ValueError("для клиента не найден договор транспортной экспедиции")
+        if not ctx["client"].get("inn") or not ctx.get("client_edo"):
+            raise ValueError("для клиента не заполнены ИНН или ID ЭДО")
+        root = ET.Element("LogisticsForwardingOrderClientTitle", {
+            "ForwardingOrderId":str(uuid.uuid4()), "Number":ctx["order_number"], "Date":ctx["order_date"], "HasCargoDocs":"0",
+        })
+        order = ET.SubElement(root, "ClientForwarderOrder")
+        cargo_infos = ET.SubElement(order, "CargoInfos")
+        for cargo_ctx in contexts:
+            cargo = ET.SubElement(cargo_infos, "CargoInfo", {
+                "ReadyFromDate":cargo_ctx["planned_departure_datetime"].strftime("%d.%m.%Y"),
+                "ReadyToDate":cargo_ctx["planned_departure_datetime"].strftime("%d.%m.%Y"),
+                "TransportationIndicator":"1", "CargoBatchId":str(uuid.uuid4()), "ShipmentCargoSpaceQuantity":"1",
+            })
+            org(ET.SubElement(cargo,"Consignee"),cargo_ctx["consignee"],cargo_ctx.get("consignee_edo",""))
+            shipper = cargo_ctx.get("loading_owner") if (cargo_ctx.get("loading_owner") or {}).get("inn") else cargo_ctx["client"]
+            org(ET.SubElement(cargo,"Shipper"),shipper)
+            ET.SubElement(ET.SubElement(cargo,"TransportInfos"),"TransportInfo",{"TransportType":"1","BodyType":"Контейнеровоз"})
+            ET.SubElement(cargo,"ClientDirectives",{"TransportationDirectives":f"Организовать перевозку контейнера {cargo_ctx['container']}"})
+            ET.SubElement(cargo,"BatchWeight",{"GrossWeight":cargo_ctx.get("weight") or "0"})
+            descriptions=ET.SubElement(cargo,"ItemDescriptions")
+            item=ET.SubElement(descriptions,"ItemDescription",{"Name":f"Контейнер {cargo_ctx['container']}","CargoSpaceQuantity":"1","HasDangerous":"0","HasRestrictedItems":"0","CanSpecifyVolume":"0","IsForStateSystemRegistration":"0","HasPackaging":"0","HasCommodityCode":"0"})
+            ET.SubElement(ET.SubElement(item,"CargoNumbers"),"CargoNumber").text=cargo_ctx["container"]
+            for tag,address_text,flag in (("CargoLocationAddress",cargo_ctx["loading"],"CargoPickupLocation"),("DestinationAddress",cargo_ctx["delivery"],"CargoDeliveryPoint")):
+                wrapper=ET.SubElement(cargo,tag,{flag:"1"}); delivery=ET.SubElement(wrapper,"CargoDeliveryAddress"); address=ET.SubElement(delivery,"Address")
+                attrs=address_attributes(address_text); mapped={"Индекс":"ZipCode","КодРегион":"Region","Город":"City","НаселПункт":"Settlement","Улица":"Street","Дом":"Building","Корпус":"Block"}
+                ET.SubElement(address,"RussianAddress",{mapped[key]:value for key,value in attrs.items() if key in mapped and value})
+        org(ET.SubElement(order,"ClientInfo"),ctx["client"],ctx["client_edo"])
+        org(ET.SubElement(order,"ForwarderInfo"),TAGLEX,TAGLEX["edo"])
+        contract_date = str(contract.get("date") or "").split("T")[0].split(" ")[0]
+        if len(contract_date) == 10 and contract_date[4] == "-":
+            contract_date = f"{contract_date[8:10]}.{contract_date[5:7]}.{contract_date[:4]}"
+        contract_node=ET.SubElement(order,"ForwardingContractRequisites",{"DocumentName":contract.get("title") or "Договор транспортной экспедиции","DocumentNumber":contract.get("number") or "","DocumentDate":contract_date})
+        ET.SubElement(contract_node,"IdentificationDetails",{"Inn":TAGLEX["inn"]})
+        signers=ET.SubElement(root,"Signers"); signer=ET.SubElement(signers,"Signer",{"SignerPowersConfirmationMethod":"1"})
+        ET.SubElement(signer,"Fio",{"LastName":parts[0],"FirstName":parts[1],**({"MiddleName":" ".join(parts[2:])} if len(parts)>2 else {})})
+        return ET.tostring(root,encoding="utf-8",xml_declaration=True).decode("utf-8")
 

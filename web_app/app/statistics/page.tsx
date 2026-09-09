@@ -4,8 +4,7 @@ import {useEffect,useMemo,useState} from "react";
 import appPackage from "../../package.json";
 import styles from "./page.module.css";
 
-type DocumentType="ЭТрН"|"Заявка"|"Поручение";
-type Item={month:string;documentType:DocumentType;client:string;carrier:string;signed:boolean};
+type Item={month:string;client:string;carrier:string;signed:boolean};
 type Metric="total"|"signed"|"unsigned";
 
 const monthName=(value:string,short=false)=>{
@@ -20,7 +19,6 @@ export default function Statistics(){
   const [client,setClient]=useState("all");
   const [carrier,setCarrier]=useState("all");
   const [metric,setMetric]=useState<Metric>("total");
-  const [type,setType]=useState<DocumentType|"all">("all");
 
   const load=()=>{
     setLoading(true);setError("");
@@ -34,12 +32,9 @@ export default function Statistics(){
   const clients=useMemo(()=>[...new Set(items.map(item=>item.client))].sort((a,b)=>a.localeCompare(b,"ru")),[items]);
   const carriers=useMemo(()=>[...new Set(items.map(item=>item.carrier))].sort((a,b)=>a.localeCompare(b,"ru")),[items]);
   const base=useMemo(()=>items.filter(item=>(client==="all"||item.client===client)&&(carrier==="all"||item.carrier===carrier)),[items,client,carrier]);
-  const filtered=useMemo(()=>base.filter(item=>type==="all"||item.documentType===type),[base,type]);
+  const filtered=base;
   const totals=useMemo(()=>({
     total:filtered.length,
-    etrn:filtered.filter(i=>i.documentType==="ЭТрН").length,
-    orders:filtered.filter(i=>i.documentType==="Заявка").length,
-    forwarding:filtered.filter(i=>i.documentType==="Поручение").length,
     signed:filtered.filter(i=>i.signed).length,
     unsigned:filtered.filter(i=>!i.signed).length
   }),[filtered]);
@@ -57,7 +52,7 @@ export default function Statistics(){
     const selected=field==="client"?client:carrier;
     const choose=field==="client"?setClient:setCarrier;
     return <section className={styles.entitySection}><header><div><small>ПОМЕСЯЧНО</small><h2>{title}</h2></div><span>Нажмите на график для фильтра</span></header><div className={styles.entityGrid}>{names.map(name=>{
-      const own=base.filter(item=>(item[field]||"Не определён")===name&&(type==="all"||item.documentType===type));
+      const own=base.filter(item=>(item[field]||"Не определён")===name);
       const byMonth=new Map<string,{total:number;signed:number}>();
       for(const item of own){const row=byMonth.get(item.month)||{total:0,signed:0};row.total++;if(item.signed)row.signed++;byMonth.set(item.month,row);}
       const rows=[...byMonth.entries()].sort(([a],[b])=>a.localeCompare(b));
@@ -72,12 +67,12 @@ export default function Statistics(){
   return <main className={styles.shell}>
     <header className={styles.topbar}><div>А</div><strong>Создание ЭПД <small>версия {appPackage.version}</small></strong><nav><a href="/workspace">Создание документов</a><a href="/forwarding-orders">Поручения клиентам</a><a href="/control">Контроль подписания</a><a className={styles.active} href="/statistics">Статистика</a><a href="/edo-settings">Настройки ID ЭДО</a></nav></header>
     <section className={styles.content}>
-      <header className={styles.heading}><div><small>АНАЛИТИКА ЭПД</small><h1>Статистика документооборота</h1><p>Помесячно по клиентам и перевозчикам.</p></div><button onClick={load} disabled={loading}>{loading?"Считаем…":"Обновить"}</button></header>
+      <header className={styles.heading}><div><small>АНАЛИТИКА ЭТрН</small><h1>Статистика ЭТрН</h1><p>Помесячно по клиентам и перевозчикам, начиная с сентября 2026 года.</p></div><button onClick={load} disabled={loading}>{loading?"Считаем…":"Обновить"}</button></header>
       <section className={styles.filters}><label>Клиент<select value={client} onChange={event=>setClient(event.target.value)}><option value="all">Все клиенты</option>{clients.map(value=><option key={value}>{value}</option>)}</select></label><label>Перевозчик<select value={carrier} onChange={event=>setCarrier(event.target.value)}><option value="all">Все перевозчики</option>{carriers.map(value=><option key={value}>{value}</option>)}</select></label></section>
       {error&&<p className={styles.error}>{error}</p>}
       <section className={styles.metrics}>{[
-        {name:"Всего",value:totals.total},{name:"ЭТрН",value:totals.etrn,type:"ЭТрН" as DocumentType},{name:"Заявки",value:totals.orders,type:"Заявка" as DocumentType},{name:"Поручения",value:totals.forwarding,type:"Поручение" as DocumentType},{name:"Подписано",value:totals.signed},{name:"Не подписано",value:totals.unsigned}
-      ].map(card=><button key={card.name} className={card.type&&type===card.type?styles.selectedMetric:""} onClick={()=>card.type&&setType(type===card.type?"all":card.type)}><span>{card.name}</span><strong>{card.value}</strong>{card.type&&<small>{type===card.type?"Показан только этот тип":"Нажмите для фильтра"}</small>}</button>)}</section>
+        {name:"ЭТрН",value:totals.total},{name:"Подписано",value:totals.signed},{name:"Не подписано",value:totals.unsigned}
+      ].map(card=><button key={card.name}><span>{card.name}</span><strong>{card.value}</strong></button>)}</section>
 
       <section className={styles.charts}>
         <article className={styles.chartCard}>

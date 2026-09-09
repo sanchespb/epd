@@ -134,6 +134,20 @@ def refresh_sources():
 def handle(request):
     refresh_catalogs()
     refresh_sources()
+    if request.get("action") == "forwarding_userdata_multi":
+        containers = [clean(item) for item in request.get("containers", []) if clean(item)]
+        if not containers:
+            raise ValueError("в заказе нет контейнеров")
+        user = clean(request.get("user"))
+        contexts = []
+        for container_number in containers:
+            cargo, auto = cargo_index.get(container_number), auto_index.get(container_number)
+            if not cargo or not auto:
+                raise ValueError(f"контейнер {container_number} не найден в обоих реестрах")
+            context = generator.context({**cargo, **auto, "_container":container_number}, date.fromisoformat(request.get("date") or date.today().isoformat()), user, None)
+            context["order_number"] = clean(request.get("orderNumber")) or context["order_number"]
+            contexts.append(context)
+        return {"userDataXml":generator.forwarding_order_userdata(contexts, clean(request.get("signer")))}
     container = request["container"]
     cargo, auto = cargo_index.get(container), auto_index.get(container)
     if not cargo or not auto: raise ValueError("Контейнер не найден в обоих локальных реестрах")
@@ -152,6 +166,10 @@ def handle(request):
         ]}
     if request.get("action") == "resolve_order_addresses":
         return {"loading": ctx["loading"], "delivery": ctx["delivery"]}
+    if request.get("action") == "forwarding_preview":
+        return {"client":ctx["client"],"clientEdo":ctx["client_edo"],"consignee":ctx["consignee"],"loading":ctx["loading"],"delivery":ctx["delivery"],"contract":ctx.get("client_contract"),"number":ctx["order_number"],"date":ctx["order_date"],"weight":ctx["weight"]}
+    if request.get("action") == "forwarding_userdata":
+        return {"userDataXml":generator.forwarding_order_userdata(ctx, clean(request.get("signer")))}
     ctx["gar_addresses"] = request.get("garAddresses") or {}
     for role, participant_id in (request.get("edoOverrides") or {}).items():
         if role in {"client", "consignee", "carrier"} and clean(participant_id):

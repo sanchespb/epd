@@ -68,6 +68,7 @@ const warehouseFields = {
   ROLE_NAMES:"Роли", LIST_WAREHOUSE_NAME_ENG:"Название (англ)", ADDRESS_RUS:"Адрес на русском языке",
   ADDRESS_ENG:"Адрес на английском языке", PERSON_PHONE:"Номер телефона", UNLOCODE:"UN/LOCODE", ITN:"ИНН",
 };
+const cargoOrderFieldCandidates=["ORDER_NUMBER","NUMBER_ORDER","ORDER_NUM","ORDER_CODE","DOC_PARENT_ORDER_NUMBER","ID_ORDER"];
 const warehousePostalCodeFieldCandidates = [
   "POSTAL_CODE",
   "POST_CODE",
@@ -271,6 +272,11 @@ async function getDriverRows(session,onProgress=()=>{}) {
   return getRows(session,"LIST_DRIVERS",{...driverFields,[fieldName]:"Дата окончания доверенности"},null,"",onProgress);
 }
 
+async function getCargoRows(session,filters,createdSince,onProgress){
+  const fieldName=await firstSupportedField(session,"OPERATION_UNIT",cargoOrderFieldCandidates);
+  return getRows(session,"OPERATION_UNIT",fieldName?{...cargoFields,[fieldName]:"Номер заказа"}:cargoFields,filters,createdSince,onProgress);
+}
+
 async function getWarehouseRows(session,onProgress=()=>{}) {
   const fields={...warehouseFields};
   const postalField=await firstSupportedField(session,"LIST_WAREHOUSE",warehousePostalCodeFieldCandidates);
@@ -344,7 +350,7 @@ export async function syncTms({ login: loginName, password, cacheDir, referenceD
     onStatus(key,"working","Получаем данные…");
     try {
       const progress=(count,message,progressValue)=>onStatus(key,"working",message,{count,progress:progressValue});
-      const rows=key==="drivers"?await getDriverRows(session,progress):key==="points"?await getWarehouseRows(session,progress):key==="auto"?await getAutoRows(session,filter,minimumDate,progress):key==="contracts"?await getContractRows(session,progress):await getRows(session,table,fields,filter,minimumDate,progress);
+      const rows=key==="drivers"?await getDriverRows(session,progress):key==="points"?await getWarehouseRows(session,progress):key==="auto"?await getAutoRows(session,filter,minimumDate,progress):key==="cargo"?await getCargoRows(session,filter,minimumDate,progress):key==="contracts"?await getContractRows(session,progress):await getRows(session,table,fields,filter,minimumDate,progress);
       if(!rows.length) throw new Error("реестр пуст");
       const target=path.join(targetDir,filename);
       writeWorkbook(target,table,rows);

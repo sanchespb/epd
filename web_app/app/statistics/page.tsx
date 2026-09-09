@@ -71,7 +71,7 @@ export default function Statistics(){
       <section className={styles.filters}><label>Клиент<select value={client} onChange={event=>setClient(event.target.value)}><option value="all">Все клиенты</option>{clients.map(value=><option key={value}>{value}</option>)}</select></label><label>Перевозчик<select value={carrier} onChange={event=>setCarrier(event.target.value)}><option value="all">Все перевозчики</option>{carriers.map(value=><option key={value}>{value}</option>)}</select></label></section>
       {error&&<p className={styles.error}>{error}</p>}
       <section className={styles.metrics}>{[
-        {name:"Всего ЭТрН",value:totals.total},{name:"Подписано",value:totals.signed},{name:"Не подписано",value:totals.unsigned}
+        {name:"ЭТрН",value:totals.total},{name:"Подписано",value:totals.signed},{name:"Не подписано",value:totals.unsigned}
       ].map(card=><button key={card.name}><span>{card.name}</span><strong>{card.value}</strong></button>)}</section>
 
       <section className={styles.charts}>

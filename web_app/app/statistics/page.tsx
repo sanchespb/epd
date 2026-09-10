@@ -32,9 +32,7 @@ export default function Statistics(){
   };
   useEffect(load,[]);
 
-  const clients=useMemo(()=>[...new Set(items.map(item=>item.client))].sort((a,b)=>a.localeCompare(b,"ru")),[items]);
-  const carriers=useMemo(()=>[...new Set(items.map(item=>item.carrier))].sort((a,b)=>a.localeCompare(b,"ru")),[items]);
-  const base=useMemo<ChartItem[]>(()=>items.filter(item=>audience==="carriers"?(carrier==="all"||item.carrier===carrier):(client==="all"||item.client===client)).map(item=>({...item,signed:audience==="carriers"?item.carrierTitle2Signed:item.clientTitle3Signed})),[items,audience,client,carrier]);
+  const base=useMemo<ChartItem[]>(()=>items.filter(item=>audience==="carriers"?(carrier==="all"||item.carrier===carrier):(item.carrierTitle2Signed||item.clientTitle3Signed)&&(client==="all"||item.client===client)).map(item=>({...item,signed:audience==="carriers"?item.carrierTitle2Signed:item.clientTitle3Signed})),[items,audience,client,carrier]);
   const filtered=base;
   const totals=useMemo(()=>({
     total:filtered.length,
@@ -72,7 +70,6 @@ export default function Statistics(){
     <section className={styles.content}>
       <header className={styles.heading}><div><small>АНАЛИТИКА ЭТрН</small><h1>Статистика ЭТрН</h1><p>{audience==="carriers"?"Контроль подписания титула 2 перевозчиками.":"Контроль подписания титула 3 клиентами."}</p></div><button onClick={load} disabled={loading}>{loading?"Считаем…":"Обновить"}</button></header>
       <section className={styles.audienceSwitch}><button className={audience==="carriers"?styles.on:""} onClick={()=>{setAudience("carriers");setClient("all");}}>Перевозчики · титул 2</button><button className={audience==="clients"?styles.on:""} onClick={()=>{setAudience("clients");setCarrier("all");}}>Клиенты · титул 3</button></section>
-      <section className={styles.filters}>{audience==="carriers"?<label>Перевозчик<select value={carrier} onChange={event=>setCarrier(event.target.value)}><option value="all">Все перевозчики</option>{carriers.map(value=><option key={value}>{value}</option>)}</select></label>:<label>Клиент<select value={client} onChange={event=>setClient(event.target.value)}><option value="all">Все клиенты</option>{clients.map(value=><option key={value}>{value}</option>)}</select></label>}</section>
       {error&&<p className={styles.error}>{error}</p>}
       <section className={styles.metrics}>{[
         {name:"ЭТрН",value:totals.total},{name:"Подписано",value:totals.signed},{name:"Не подписано",value:totals.unsigned}

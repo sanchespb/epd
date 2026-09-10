@@ -88,16 +88,25 @@ class Generator(BaseGenerator):
         if isinstance(contexts, dict):
             contexts = [contexts]
         ctx = contexts[0]
+        def russian_address(parent, text):
+            attrs = address_attributes(text or "")
+            region = attrs.get("КодРегион")
+            if not region:
+                return False
+            mapped = {"Индекс":"ZipCode","КодРегион":"Region","Город":"City","НаселПункт":"Settlement","Улица":"Street","Дом":"Building","Корпус":"Block"}
+            values = {mapped[key]:value for key,value in attrs.items() if key in mapped and value}
+            ET.SubElement(parent, "RussianAddress", values)
+            return True
+
         def org(parent, data, edo=""):
             details = ET.SubElement(parent, "OrganizationDetails", {
                 "OrgType":"2", "OrgName":data.get("name") or "Не указано", "Inn":data.get("inn") or "",
                 **({"Kpp":data.get("kpp")} if data.get("kpp") else {}),
                 **({"FnsParticipantId":edo} if edo else {}),
             })
-            attrs = address_attributes(data.get("address") or "")
-            mapped = {"Индекс":"ZipCode","КодРегион":"Region","Город":"City","НаселПункт":"Settlement","Улица":"Street","Дом":"Building","Корпус":"Block"}
-            address = ET.SubElement(details, "Address")
-            ET.SubElement(address, "RussianAddress", {mapped[key]:value for key,value in attrs.items() if key in mapped and value})
+            address = ET.Element("Address")
+            if russian_address(address, data.get("address") or ""):
+                details.append(address)
 
         parts = signer_name.split()
         if len(parts) < 2:
@@ -116,21 +125,23 @@ class Generator(BaseGenerator):
             cargo = ET.SubElement(cargo_infos, "CargoInfo", {
                 "ReadyFromDate":cargo_ctx["planned_departure_datetime"].strftime("%d.%m.%Y"),
                 "ReadyToDate":cargo_ctx["planned_departure_datetime"].strftime("%d.%m.%Y"),
-                "TransportationIndicator":"1", "CargoBatchId":str(uuid.uuid4()), "ShipmentCargoSpaceQuantity":"1",
+                "TransportationIndicator":"1", "CargoBatchId":str(uuid.uuid4()), "ShipmentCargoSpaceQuantity":"1", "NotifyReq":"0",
             })
             org(ET.SubElement(cargo,"Consignee"),cargo_ctx["consignee"],cargo_ctx.get("consignee_edo",""))
             shipper = cargo_ctx.get("loading_owner") if (cargo_ctx.get("loading_owner") or {}).get("inn") else cargo_ctx["client"]
             org(ET.SubElement(cargo,"Shipper"),shipper)
             ET.SubElement(ET.SubElement(cargo,"TransportInfos"),"TransportInfo",{"TransportType":"1","BodyType":"Контейнеровоз"})
-            ET.SubElement(cargo,"ClientDirectives",{"TransportationDirectives":f"Организовать перевозку контейнера {cargo_ctx['container']}"})
-            ET.SubElement(cargo,"BatchWeight",{"GrossWeight":cargo_ctx.get("weight") or "0"})
+            weight = cargo_ctx.get("weight") or "0"
+            ET.SubElement(cargo,"BatchWeight",{"NetWeight":weight,"GrossWeight":weight})
             descriptions=ET.SubElement(cargo,"ItemDescriptions")
             item=ET.SubElement(descriptions,"ItemDescription",{"Name":f"Контейнер {cargo_ctx['container']}","CargoSpaceQuantity":"1","HasDangerous":"0","HasRestrictedItems":"0","CanSpecifyVolume":"0","IsForStateSystemRegistration":"0","HasPackaging":"0","HasCommodityCode":"0"})
-            ET.SubElement(ET.SubElement(item,"CargoNumbers"),"CargoNumber").text=cargo_ctx["container"]
+            ET.SubElement(ET.SubElement(item,"Marks"),"Mark").text=cargo_ctx["container"]
             for tag,address_text,flag in (("CargoLocationAddress",cargo_ctx["loading"],"CargoPickupLocation"),("DestinationAddress",cargo_ctx["delivery"],"CargoDeliveryPoint")):
-                wrapper=ET.SubElement(cargo,tag,{flag:"1"}); delivery=ET.SubElement(wrapper,"CargoDeliveryAddress"); address=ET.SubElement(delivery,"Address")
-                attrs=address_attributes(address_text); mapped={"Индекс":"ZipCode","КодРегион":"Region","Город":"City","НаселПункт":"Settlement","Улица":"Street","Дом":"Building","Корпус":"Block"}
-                ET.SubElement(address,"RussianAddress",{mapped[key]:value for key,value in attrs.items() if key in mapped and value})
+                fallback = shipper.get("address") if tag == "CargoLocationAddress" else cargo_ctx["consignee"].get("address")
+                address=ET.Element("Address")
+                if not russian_address(address,address_text) and not russian_address(address,fallback):
+                    continue
+                wrapper=ET.SubElement(cargo,tag,{flag:"1"}); delivery=ET.SubElement(wrapper,"CargoDeliveryAddress"); delivery.append(address)
         org(ET.SubElement(order,"ClientInfo"),ctx["client"],ctx["client_edo"])
         org(ET.SubElement(order,"ForwarderInfo"),TAGLEX,TAGLEX["edo"])
         contract_date = str(contract.get("date") or "").split("T")[0].split(" ")[0]

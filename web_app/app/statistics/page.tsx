@@ -4,10 +4,9 @@ import {useEffect,useMemo,useState} from "react";
 import appPackage from "../../package.json";
 import styles from "./page.module.css";
 
-type Item={month:string;client:string;carrier:string;carrierTitle2Signed:boolean;clientTitle3Signed:boolean};
+type Item={month:string;carrier:string;carrierTitle2Signed:boolean};
 type ChartItem=Item&{signed:boolean};
 type Metric="total"|"signed"|"unsigned";
-type Audience="carriers"|"clients";
 
 const monthName=(value:string,short=false)=>{
   const [year,month]=value.split("-").map(Number);
@@ -18,10 +17,8 @@ export default function Statistics(){
   const [items,setItems]=useState<Item[]>([]);
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState("");
-  const [client,setClient]=useState("all");
   const [carrier,setCarrier]=useState("all");
   const [metric,setMetric]=useState<Metric>("total");
-  const [audience,setAudience]=useState<Audience>("carriers");
 
   const load=()=>{
     setLoading(true);setError("");
@@ -32,7 +29,7 @@ export default function Statistics(){
   };
   useEffect(load,[]);
 
-  const base=useMemo<ChartItem[]>(()=>items.filter(item=>audience==="carriers"?(carrier==="all"||item.carrier===carrier):(item.carrierTitle2Signed||item.clientTitle3Signed)&&(client==="all"||item.client===client)).map(item=>({...item,signed:audience==="carriers"?item.carrierTitle2Signed:item.clientTitle3Signed})),[items,audience,client,carrier]);
+  const base=useMemo<ChartItem[]>(()=>items.filter(item=>carrier==="all"||item.carrier===carrier).map(item=>({...item,signed:item.carrierTitle2Signed})),[items,carrier]);
   const filtered=base;
   const totals=useMemo(()=>({
     total:filtered.length,
@@ -48,12 +45,12 @@ export default function Statistics(){
   const signedPercent=totals.total?Math.round(totals.signed/totals.total*100):0;
   const circumference=2*Math.PI*46;
 
-  const EntityCharts=({title,field}:{title:string;field:"client"|"carrier"})=>{
-    const names=[...new Set(base.map(item=>item[field]||"Не определён"))].sort((a,b)=>a.localeCompare(b,"ru"));
-    const selected=field==="client"?client:carrier;
-    const choose=field==="client"?setClient:setCarrier;
-    return <section className={styles.entitySection}><header><div><small>ПОМЕСЯЧНО</small><h2>{title}</h2></div><span>Нажмите на график для фильтра</span></header><div className={styles.entityGrid}>{names.map(name=>{
-      const own=base.filter(item=>(item[field]||"Не определён")===name);
+  const EntityCharts=()=>{
+    const names=[...new Set(base.map(item=>item.carrier||"Не определён"))].sort((a,b)=>a.localeCompare(b,"ru"));
+    const selected=carrier;
+    const choose=setCarrier;
+    return <section className={styles.entitySection}><header><div><small>ПОМЕСЯЧНО</small><h2>Перевозчики · титул 2</h2></div><span>Нажмите на график для фильтра</span></header><div className={styles.entityGrid}>{names.map(name=>{
+      const own=base.filter(item=>(item.carrier||"Не определён")===name);
       const byMonth=new Map<string,{total:number;signed:number}>();
       for(const item of own){const row=byMonth.get(item.month)||{total:0,signed:0};row.total++;if(item.signed)row.signed++;byMonth.set(item.month,row);}
       const rows=[...byMonth.entries()].sort(([a],[b])=>a.localeCompare(b));
@@ -68,8 +65,7 @@ export default function Statistics(){
   return <main className={styles.shell}>
     <header className={styles.topbar}><div>А</div><strong>Создание ЭПД <small>версия {appPackage.version}</small></strong><nav><a href="/workspace">Создание документов</a><a href="/forwarding-orders">Поручения клиентам</a><a href="/control">Контроль подписания</a><a className={styles.active} href="/statistics">Статистика</a><a href="/edo-settings">Настройки ID ЭДО</a></nav></header>
     <section className={styles.content}>
-      <header className={styles.heading}><div><small>АНАЛИТИКА ЭТрН</small><h1>Статистика ЭТрН</h1><p>{audience==="carriers"?"Контроль подписания титула 2 перевозчиками.":"Контроль подписания титула 3 клиентами."}</p></div><button onClick={load} disabled={loading}>{loading?"Считаем…":"Обновить"}</button></header>
-      <section className={styles.audienceSwitch}><button className={audience==="carriers"?styles.on:""} onClick={()=>{setAudience("carriers");setClient("all");}}>Перевозчики · титул 2</button><button className={audience==="clients"?styles.on:""} onClick={()=>{setAudience("clients");setCarrier("all");}}>Клиенты · титул 3</button></section>
+      <header className={styles.heading}><div><small>АНАЛИТИКА ЭТрН</small><h1>Статистика ЭТрН</h1><p>Контроль подписания титула 2 перевозчиками.</p></div><button onClick={load} disabled={loading}>{loading?"Считаем…":"Обновить"}</button></header>
       {error&&<p className={styles.error}>{error}</p>}
       <section className={styles.metrics}>{[
         {name:"ЭТрН",value:totals.total},{name:"Подписано",value:totals.signed},{name:"Не подписано",value:totals.unsigned}
@@ -81,13 +77,13 @@ export default function Statistics(){
           <div className={styles.barChart}>{monthly.map(row=>{const value=row[metric];return <div className={styles.barColumn} key={row.month}><div className={styles.barValue}>{value}</div><div className={styles.barTrack}><div className={styles.bar} style={{height:`${Math.max(value?5:0,value/chartMax*100)}%`}} title={`${monthName(row.month)}: ${value}`}/></div><span>{monthName(row.month,true)}</span></div>})}{!monthly.length&&<p className={styles.chartEmpty}>Нет данных</p>}</div>
         </article>
         <article className={styles.chartCard}>
-          <header><div><small>ПОДПИСАНИЕ</small><h2>Доля подписанных · титул {audience==="carriers"?"2":"3"}</h2></div></header>
+          <header><div><small>ПОДПИСАНИЕ</small><h2>Доля подписанных · титул 2</h2></div></header>
           <div className={styles.donutWrap}><svg className={styles.donut} viewBox="0 0 120 120"><circle cx="60" cy="60" r="46"/><circle className={styles.donutValue} cx="60" cy="60" r="46" strokeDasharray={circumference} strokeDashoffset={circumference*(1-signedPercent/100)}/></svg><div className={styles.donutLabel}><strong>{signedPercent}%</strong><span>подписано</span></div></div>
           <div className={styles.legend}><button onClick={()=>setMetric("signed")}><i className={styles.green}/><span>Подписано</span><strong>{totals.signed}</strong></button><button onClick={()=>setMetric("unsigned")}><i className={styles.red}/><span>Не подписано</span><strong>{totals.unsigned}</strong></button></div>
         </article>
       </section>
 
-      {audience==="carriers"?<EntityCharts title="Перевозчики · титул 2" field="carrier"/>:<EntityCharts title="Клиенты · титул 3" field="client"/>}
+      <EntityCharts/>
     </section>
   </main>;
 }

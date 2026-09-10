@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from address_xml import known_gar, complete_gar
 from data_sources import Catalogs
-from xml_generator import Generator, TAGLEX, address_attributes, _set_address, _set_contract
+from xml_generator import Generator, TAGLEX, address_attributes, _set_address, _set_contract, cargo_packaging, known_point_phone, party
 
 
 class AddressRegressions(unittest.TestCase):
@@ -63,6 +63,19 @@ class AddressRegressions(unittest.TestCase):
             [item.text for item in contract.findall('ИдРекСост/ИННЮЛ')],
             ['7734515704', '7709222373'],
         )
+
+    def test_cargo_packaging_rules(self):
+        self.assertEqual(cargo_packaging({"name": 'ООО "СК Трейд"'}), ("короба", "00"))
+        self.assertEqual(cargo_packaging({"name": 'ООО "Другой клиент"'}), ("-", "00"))
+
+    def test_known_reference_fallbacks(self):
+        self.assertEqual(known_point_phone({"Название": "Силикатная"}), "+74991879088")
+        self.assertEqual(known_point_phone({"Название": "ТК Усады"}), "+74955653350")
+        self.assertEqual(party({"Наименование": 'ООО "ТЛК КЕДР"'})["phone"], "+73433790858")
+        tander = party({"Наименование": 'АО "ТАНДЕР"'})
+        self.assertEqual(tander["inn"], "2310031475")
+        self.assertEqual(tander["phone"], "+78612774654")
+        self.assertTrue(tander["address"].startswith("350072"))
 
 
 if __name__ == '__main__':

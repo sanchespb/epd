@@ -30,12 +30,30 @@ KNOWN_PARTY_PHONES_BY_NAME = {
     "АГМ": "+79255030287",
 }
 
+KNOWN_PARTY_DETAILS_BY_NAME = (
+    (("ТЛК КЕДР", "ТРАНСПОРТНО ЛОГИСТИЧЕСКАЯ КОМПАНИЯ КЕДР"), {"phone": "+73433790858"}),
+    (("ФТК СОЛТРАНС", "СОЛТРАНС"), {"phone": "+78124954312"}),
+    (("КОНТЭО",), {"phone": "+78122445410"}),
+    (("НОПЕУС",), {"phone": "+74952301330"}),
+    (("ТК ИРБИС", "ИРБИС"), {"phone": "+79150523700"}),
+    (("ТАНДЕР",), {
+        "inn": "2310031475",
+        "phone": "+78612774654",
+        "address": "350072, Краснодарский край, г. Краснодар, ул. им. Леваневского, дом 185",
+    }),
+)
+
 KNOWN_POINT_PHONES = (
     (("ПКТ", "ПЕРВЫЙ КОНТЕЙНЕРНЫЙ ТЕРМИНАЛ"), "+78123357701"),
     (("ПЛП", "ПЕТРОЛЕСПОРТ"), "+78123638779"),
     (("КТСП", "КОНТЕЙНЕРНЫЙ ТЕРМИНАЛ САНКТ ПЕТЕРБУРГ"), "+78123357111"),
     (("НЕВА МЕТАЛЛ",), "+78127407011"),
     (("ФЕНИКС БРОНКА", "БРОНКА", "ФЕНИКС"), "+78127772000"),
+    (("СИЛИКАТНАЯ",), "+74991879088"),
+    (("ТК УСАДЫ", "КТ УСАДЫ"), "+74955653350"),
+    (("ХОВРИНО ЛОГИСТИКА КС", "ХОВРИНО"), "+74953631897"),
+    (("БЕЛЫЙ РАСТ",), "+74952409506"),
+    (("ЭЛЕКТРОУГЛИ",), "+79859674145"),
 )
 
 ADDRESS_PART_PATTERNS = {
@@ -57,6 +75,13 @@ def normalize_phone(value) -> str:
 
 def known_party_phone(name: str) -> str:
     return KNOWN_PARTY_PHONES_BY_NAME.get(normalize_name(name), "")
+
+def known_party_details(name: str) -> dict:
+    key = normalize_name(name)
+    for aliases, details in KNOWN_PARTY_DETAILS_BY_NAME:
+        if any(normalize_name(alias) in key for alias in aliases):
+            return details
+    return {}
 
 
 def known_point_phone(point: dict | None) -> str:
@@ -166,14 +191,20 @@ def compact_address(value: str, limit: int = 50) -> str:
 def party(company: dict | None, fallback_name: str = "") -> dict:
     company = company or {}
     name = organization_name(company, fallback_name)
-    inn = clean(company.get("ИНН"))
+    known = known_party_details(name or fallback_name)
+    inn = clean(company.get("ИНН")) or known.get("inn", "")
     return {
         "name": name,
         "inn": inn,
         "kpp": clean(company.get("КПП")),
-        "phone": normalize_phone(company.get("Телефон") or company.get("Телефон (раб.)")) or KNOWN_PARTY_PHONES.get(inn, "") or known_party_phone(name),
-        "address": clean(company.get("Фактический адрес") or company.get("Юридический адрес")),
+        "phone": normalize_phone(company.get("Телефон") or company.get("Телефон (раб.)")) or KNOWN_PARTY_PHONES.get(inn, "") or known_party_phone(name) or known.get("phone", ""),
+        "address": clean(company.get("Фактический адрес") or company.get("Юридический адрес")) or known.get("address", ""),
     }
+
+
+def cargo_packaging(client: dict | None) -> tuple[str, str]:
+    client_name = normalize_name((client or {}).get("name"))
+    return ("короба" if normalize_name("СК Трейд") in client_name else "-", "00")
 
 
 def address_attributes(text: str) -> dict:
@@ -555,8 +586,9 @@ class Generator:
                 instructions.attrib.pop("СвПломба", None)
         cargo = info.find("СвГруз/ОпГруз")
         cargo.set("НаимГруз", f"Порожний контейнер {ctx['container']}" if empty else f"Контейнер {ctx['container']}")
-        if empty:
-            cargo.set("СпУпак", "Отсутствует")
+        packaging_method, package_type = cargo_packaging(ctx.get("client"))
+        cargo.set("СпУпак", packaging_method)
+        cargo.set("ВидТар", package_type)
         container_info = cargo.find("СвКонтейн")
         if container_info is not None:
             cargo.remove(container_info)

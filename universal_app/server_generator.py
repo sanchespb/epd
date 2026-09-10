@@ -136,12 +136,12 @@ class Generator(BaseGenerator):
             descriptions=ET.SubElement(cargo,"ItemDescriptions")
             item=ET.SubElement(descriptions,"ItemDescription",{"Name":f"Контейнер {cargo_ctx['container']}","CargoSpaceQuantity":"1","HasDangerous":"0","HasRestrictedItems":"0","CanSpecifyVolume":"0","IsForStateSystemRegistration":"0","HasPackaging":"0","HasCommodityCode":"0"})
             ET.SubElement(ET.SubElement(item,"Marks"),"Mark").text=cargo_ctx["container"]
-            for tag,address_text,flag in (("CargoLocationAddress",cargo_ctx["loading"],"CargoPickupLocation"),("DestinationAddress",cargo_ctx["delivery"],"CargoDeliveryPoint")):
-                fallback = shipper.get("address") if tag == "CargoLocationAddress" else cargo_ctx["consignee"].get("address")
-                address=ET.Element("Address")
-                if not russian_address(address,address_text) and not russian_address(address,fallback):
-                    continue
-                wrapper=ET.SubElement(cargo,tag,{flag:"1"}); delivery=ET.SubElement(wrapper,"CargoDeliveryAddress"); delivery.append(address)
+            ET.SubElement(ET.SubElement(item,"CargoNumbers"),"CargoNumber").text=cargo_ctx["container"]
+            containers=ET.SubElement(cargo,"TransportContainers")
+            ET.SubElement(containers,"TransportContainer",{"ContainerNumber":cargo_ctx["container"],"ContainerPurpose":"2"})
+            address=ET.Element("Address")
+            if russian_address(address,cargo_ctx["loading"]) or russian_address(address,shipper.get("address")):
+                wrapper=ET.SubElement(cargo,"CargoLocationAddress",{"CargoPickupLocation":"1"}); delivery=ET.SubElement(wrapper,"CargoDeliveryAddress"); delivery.append(address)
         org(ET.SubElement(order,"ClientInfo"),ctx["client"],ctx["client_edo"])
         org(ET.SubElement(order,"ForwarderInfo"),TAGLEX,TAGLEX["edo"])
         contract_date = str(contract.get("date") or "").split("T")[0].split(" ")[0]

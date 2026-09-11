@@ -458,6 +458,19 @@ const server = http.createServer((request, response) => {
     response.writeHead(200,{"Content-Type":"application/json; charset=utf-8"});
     response.end(JSON.stringify({configured,sources:sourceStatus()})); return;
   }
+  if (request.method === "POST" && url.pathname === "/api/trips/search") {
+    let body="";request.setEncoding("utf8");request.on("data",chunk=>body+=chunk);request.on("end",()=>void(async()=>{try{
+      const payload=JSON.parse(body||"{}");if(!Array.isArray(payload.containers))throw new Error("Не переданы номера контейнеров");
+      const result=await sendGeneratorRequest({...payload,action:"search_trips"});if(result.error)throw new Error(result.error);
+      response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify(result));
+    }catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось выполнить поиск"}));}})());return;
+  }
+  if (request.method === "GET" && url.pathname === "/api/orders/search") {
+    void(async()=>{try{
+      const result=await sendGeneratorRequest({action:"search_orders",query:url.searchParams.get("query")||"",limit:Number(url.searchParams.get("limit")||20)});if(result.error)throw new Error(result.error);
+      response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify(result));
+    }catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось загрузить заказы"}));}})();return;
+  }
   if (request.method === "GET" && url.pathname === "/api/source-cache") {
     const kind=url.searchParams.get("kind");
     const getFile=sourceFiles[kind||""];

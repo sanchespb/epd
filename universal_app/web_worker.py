@@ -41,7 +41,7 @@ generator = Generator(ROOT / "resources", catalogs)
 cache_dir = ROOT.parent / "web_app" / "work" / "source-cache"
 source_stamp = None
 catalog_stamp = None
-cargo_index, auto_index = {}, {}
+cargo_rows, cargo_index, auto_index = [], {}, {}
 
 
 def current_catalog_stamp():
@@ -74,7 +74,7 @@ def refresh_catalogs():
 
 
 def refresh_sources():
-    global source_stamp, cargo_index, auto_index
+    global source_stamp, cargo_rows, cargo_index, auto_index
     cargo_file, auto_file = cache_dir / "cargo.xlsx", cache_dir / "auto.xlsx"
     cargo_json, auto_json = cargo_file.with_suffix(".json"), auto_file.with_suffix(".json")
     cargo_source = cargo_json if cargo_json.exists() else cargo_file
@@ -86,8 +86,9 @@ def refresh_sources():
             with path.open(encoding="utf-8") as stream:
                 return json.load(stream)
         return read_xlsx(xlsx_path, sheet)
+    cargo_rows = read_source(cargo_source, cargo_file, "OPERATION_UNIT")
     cargo_index = {}
-    for row in read_source(cargo_source, cargo_file, "OPERATION_UNIT"):
+    for row in cargo_rows:
         for cell in row.values():
             text = clean(cell)
             if len(text) >= 11:
@@ -134,7 +135,41 @@ def refresh_sources():
 def handle(request):
     refresh_catalogs()
     refresh_sources()
-    if request.get("action") == "forwarding_userdata_multi":
+    action = request.get("action")
+    if action == "search_trips":
+        containers = list(dict.fromkeys(clean(item).upper() for item in request.get("containers", []) if clean(item)))[:100]
+        items = []
+        for container_number in containers:
+            cargo, auto = cargo_index.get(container_number), auto_index.get(container_number)
+            resolved_auto = dict(auto) if auto else None
+            if cargo and resolved_auto:
+                try:
+                    context = generator.context({**cargo, **resolved_auto, "_container":container_number}, date.today(), clean(request.get("user")) or "Пользователь", None)
+                    if context.get("loading"):
+                        resolved_auto["Адрес места отправления"] = context["loading"]
+                except Exception:
+                    pass
+            items.append({"container":container_number, "cargo":cargo, "auto":resolved_auto, "missingCargo":not cargo, "missingAuto":not auto})
+        return {"items":items}
+    if action == "search_orders":
+        needle = clean(request.get("query")).casefold()
+        limit = min(max(int(request.get("limit") or 20), 1), 100)
+        container_by_row = {id(row):key for key, row in cargo_index.items()}
+        grouped = {}
+        for cargo in cargo_rows:
+            order_number = clean(value(cargo, "Номер заказа"))
+            container_number = container_by_row.get(id(cargo), "")
+            if not order_number or not container_number:
+                continue
+            auto = auto_index.get(container_number) or {}
+            order = grouped.setdefault(order_number, {"number":order_number, "containers":[], "client":clean(value(cargo, "Клиент", "Заказчик")), "route":clean(value(auto, "Маршрут")), "departure":clean(value(auto, "Плановая дата отправления")), "arrival":clean(value(auto, "Плановая дата прибытия", "Последняя план дата прибытия", "ETA (план дата прибытия)"))})
+            if container_number not in order["containers"]:
+                order["containers"].append(container_number)
+        orders = list(grouped.values())
+        if needle:
+            orders = [order for order in orders if needle in " ".join([order["number"], order["client"], order["route"], *order["containers"]]).casefold()]
+        return {"items":orders[:limit], "total":len(orders)}
+    if action == "forwarding_userdata_multi":
         containers = [clean(item) for item in request.get("containers", []) if clean(item)]
         if not containers:
             raise ValueError("в заказе нет контейнеров")
@@ -196,4 +231,4 @@ for line in sys.stdin:
         request=json.loads(line); result=handle(request); result["requestId"]=request.get("requestId")
     except Exception as error:
         result={"requestId":request.get("requestId") if "request" in locals() else None,"error":str(error)}
-    print(json.dumps(result,ensure_ascii=True),flush=True)
+    print(json.dumps(result,ensure_ascii=True,default=str),flush=True)

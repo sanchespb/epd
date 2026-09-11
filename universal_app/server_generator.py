@@ -121,7 +121,7 @@ class Generator(BaseGenerator):
         })
         order = ET.SubElement(root, "ClientForwarderOrder")
         cargo_infos = ET.SubElement(order, "CargoInfos")
-        for cargo_ctx in contexts:
+        for cargo_index, cargo_ctx in enumerate(contexts, start=1):
             cargo = ET.SubElement(cargo_infos, "CargoInfo", {
                 "ReadyFromDate":cargo_ctx["planned_departure_datetime"].strftime("%d.%m.%Y"),
                 "ReadyToDate":cargo_ctx["planned_departure_datetime"].strftime("%d.%m.%Y"),
@@ -136,12 +136,17 @@ class Generator(BaseGenerator):
             descriptions=ET.SubElement(cargo,"ItemDescriptions")
             item=ET.SubElement(descriptions,"ItemDescription",{"Name":f"Контейнер {cargo_ctx['container']}","CargoSpaceQuantity":"1","HasDangerous":"0","HasRestrictedItems":"0","CanSpecifyVolume":"0","IsForStateSystemRegistration":"0","HasPackaging":"0","HasCommodityCode":"0"})
             ET.SubElement(ET.SubElement(item,"Marks"),"Mark").text=cargo_ctx["container"]
-            ET.SubElement(ET.SubElement(item,"CargoNumbers"),"CargoNumber").text=cargo_ctx["container"]
+            ET.SubElement(ET.SubElement(item,"CargoNumbers"),"CargoNumber").text=str(cargo_index)
+            origin=ET.SubElement(item,"CargoOriginCountryInfo")
+            ET.SubElement(origin,"Country").text="643"
+            ET.SubElement(item,"CargoWeight",{"NetWeight":weight,"GrossWeight":weight})
             containers=ET.SubElement(cargo,"TransportContainers")
-            ET.SubElement(containers,"TransportContainer",{"ContainerNumber":cargo_ctx["container"],"ContainerPurpose":"2"})
-            address=ET.Element("Address")
-            if russian_address(address,cargo_ctx["loading"]) or russian_address(address,shipper.get("address")):
-                wrapper=ET.SubElement(cargo,"CargoLocationAddress",{"CargoPickupLocation":"1"}); delivery=ET.SubElement(wrapper,"CargoDeliveryAddress"); delivery.append(address)
+            ET.SubElement(containers,"TransportContainer",{"ContainerOrderNumber":str(cargo_index),"IsContainerProvided":"2"})
+            for tag,address_text,fallback,flag in (("CargoLocationAddress",cargo_ctx["loading"],shipper.get("address"),"CargoPickupLocation"),("DestinationAddress",cargo_ctx["delivery"],cargo_ctx["consignee"].get("address"),"CargoDeliveryPoint")):
+                address=ET.Element("Address")
+                if not russian_address(address,address_text) and not russian_address(address,fallback):
+                    continue
+                wrapper=ET.SubElement(cargo,tag,{flag:"1"}); delivery=ET.SubElement(wrapper,"CargoDeliveryAddress"); delivery.append(address)
         org(ET.SubElement(order,"ClientInfo"),ctx["client"],ctx["client_edo"])
         org(ET.SubElement(order,"ForwarderInfo"),TAGLEX,TAGLEX["edo"])
         contract_date = str(contract.get("date") or "").split("T")[0].split(" ")[0]
@@ -151,5 +156,13 @@ class Generator(BaseGenerator):
         ET.SubElement(contract_node,"IdentificationDetails",{"Inn":TAGLEX["inn"]})
         signers=ET.SubElement(root,"Signers"); signer=ET.SubElement(signers,"Signer",{"SignerPowersConfirmationMethod":"1"})
         ET.SubElement(signer,"Fio",{"LastName":parts[0],"FirstName":parts[1],**({"MiddleName":" ".join(parts[2:])} if len(parts)>2 else {})})
+        def xml_safe(value):
+            return "".join(char for char in str(value) if char in "\t\n\r" or 0x20 <= ord(char) <= 0xD7FF or 0xE000 <= ord(char) <= 0xFFFD)
+        for element in root.iter():
+            element.attrib.update({key:xml_safe(value) for key,value in element.attrib.items()})
+            if element.text:
+                element.text=xml_safe(element.text)
+            if element.tail:
+                element.tail=xml_safe(element.tail)
         return ET.tostring(root,encoding="utf-8",xml_declaration=True).decode("utf-8")
 

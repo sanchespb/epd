@@ -1,9 +1,11 @@
 import unittest
 import xml.etree.ElementTree as ET
+from datetime import datetime
 from pathlib import Path
 from address_xml import known_gar, complete_gar
 from data_sources import Catalogs
 from xml_generator import Generator, TAGLEX, address_attributes, _set_address, _set_contract, cargo_packaging, known_point_phone, party
+from server_generator import Generator as ServerGenerator
 
 
 class AddressRegressions(unittest.TestCase):
@@ -76,6 +78,26 @@ class AddressRegressions(unittest.TestCase):
         self.assertEqual(tander["inn"], "2310031475")
         self.assertEqual(tander["phone"], "+78612774654")
         self.assertTrue(tander["address"].startswith("350072"))
+
+    def test_forwarding_order_container_structure(self):
+        party_data = {"name": "ООО Тест\udc98", "inn": "7701234567", "kpp": "770101001", "address": "101000, г. Москва, ул. Тестовая, д. 1"}
+        ctx = {
+            "order_number": "28384", "order_date": "11.09.2026", "container": "XYZU4002173",
+            "planned_departure_datetime": datetime(2026, 9, 11), "weight": "1000",
+            "client": party_data, "client_edo": "2BM-client", "consignee": party_data,
+            "consignee_edo": "2BM-consignee", "loading_owner": party_data,
+            "loading": party_data["address"], "delivery": party_data["address"],
+            "client_contract": {"title": "Договор", "number": "1", "date": "2026-09-01"},
+        }
+        root = ET.fromstring(ServerGenerator.forwarding_order_userdata(ctx, "Иванов Иван Иванович"))
+        self.assertNotIn("\udc98", ET.tostring(root, encoding="unicode"))
+        cargo = root.find("./ClientForwarderOrder/CargoInfos/CargoInfo")
+        self.assertEqual(cargo.findtext("./ItemDescriptions/ItemDescription/CargoNumbers/CargoNumber"), "1")
+        self.assertEqual(cargo.findtext("./ItemDescriptions/ItemDescription/CargoOriginCountryInfo/Country"), "643")
+        self.assertEqual(cargo.find("./ItemDescriptions/ItemDescription/CargoWeight").attrib, {"NetWeight": "1000", "GrossWeight": "1000"})
+        container = cargo.find("./TransportContainers/TransportContainer")
+        self.assertEqual(container.attrib, {"ContainerOrderNumber": "1", "IsContainerProvided": "2"})
+        self.assertIsNotNone(cargo.find("DestinationAddress"))
 
 
 if __name__ == '__main__':

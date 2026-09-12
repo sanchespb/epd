@@ -37,6 +37,7 @@ const openSourceDb = () => new Promise<IDBDatabase>((resolve,reject) => {
   request.onsuccess=()=>resolve(request.result); request.onerror=()=>reject(request.error);
 });
 const saveSourceFile=async(key:string,file:File)=>{const db=await openSourceDb();await new Promise<void>((resolve,reject)=>{const tx=db.transaction("files","readwrite");tx.objectStore("files").put(file,key);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);});db.close();};
+const getSourceFile=async(key:string)=>{const db=await openSourceDb();const file=await new Promise<File|undefined>((resolve,reject)=>{const request=db.transaction("files").objectStore("files").get(key);request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});db.close();return file;};
 const clearSourceFiles=async()=>{const db=await openSourceDb();await new Promise<void>((resolve,reject)=>{const tx=db.transaction("files","readwrite");tx.objectStore("files").clear();tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);});db.close();};
 type Source = { name: string; count: number; origin?: string; updatedAt?: string };
 type Trip = Row & { _container: string; _cargo?: Row; _auto?: Row; _missingCargo?: boolean; _missingAuto?: boolean };
@@ -60,8 +61,18 @@ const normalizeContainer = (input: unknown) => {
   const letters: Record<string, string> = { А:"A",В:"B",С:"C",Е:"E",Н:"H",К:"K",М:"M",О:"O",Р:"P",Т:"T",Х:"X",У:"Y" };
   return match[0].replace(/[АВСЕНКМОРТХУ]/g, (letter) => letters[letter] ?? letter);
 };
+const normalizeCompany=(input:unknown)=>String(input??"").toUpperCase().replace(/[«»"'.,()]/g," ").replace(/\b(ООО|АО|ПАО|ЗАО|ОАО)\b/g," ").replace(/\s+/g," ").trim();
+
+const rowContainer = (row: Row) => {
+  for (const key of ["Грузовая единица", "Номера грузовых единиц", "Номер грузовой единицы по заказу", "Контейнер", "Номер контейнера", "Импорт"]) {
+    const found = normalizeContainer(row[key]); if (found) return found;
+  }
+  return "";
+};
+
 const cleanPoint = (text: string) => text.replace(/^\(RU\)\s*/i, "").replace(/\s+/g, " ").trim();
 const routeStart = (row: Row | undefined) => cleanPoint(value(row, "Маршрут").split(/\s*(?:->|→|—>)\s*/)[0] || "");
+const comparable = (text: string) => text.toLowerCase().replace(/[«»"'()]/g, "").replace(/\b(ооо|ао|пао|зао|инн|ru)\b/g, "").replace(/\d{10,12}/g, "").replace(/[^a-zа-я0-9]+/g, " ").trim();
 
 function readWorkbook(file: File, expected: string) {
   return file.arrayBuffer().then((buffer) => {
@@ -132,11 +143,29 @@ export default function Workspace() {
         if(!statusResponse.ok) throw new Error("Статус TMS недоступен");
         const status=await statusResponse.json() as {sources?:Record<string,{available:boolean;updatedAt:string,size?:number}|null>};
         if(status.sources?.edo?.available)setEdoSource({name:"Контрагенты Диадок",count:0,origin:"Сохранён на сервере",updatedAt:status.sources.edo.updatedAt});
-        const metadata=(kind:"cargo"|"auto"|"points",name:string)=>{const info=status.sources?.[kind];return info?.available?{name,count:0,origin:"Сохранён на сервере",updatedAt:info.updatedAt}:null;};
-        const cargo=metadata("cargo","TMS · Грузы текущие"),auto=metadata("auto","TMS · ТТН / CMR"),routePoints=metadata("points","TMS · Точки маршрута");
-        setCargoSource(cargo);setAutoSource(auto);setPointsSource(routePoints);
-        setMessage(cargo&&auto?"Используются сохранённые на сервере данные TMS. Введите контейнеры для поиска.":"Сохранённых реестров пока нет. Обновите данные из TMS.");
-        setRestoreProgress({active:false,completed:3,total:3,label:cargo&&auto?"Данные TMS готовы":"Сохранённые справочники не найдены"});
+        const restoreServer=async(kind:"cargo"|"auto"|"points",name:string)=>{
+          const info=status.sources?.[kind];
+          const title={cargo:"Грузы → Текущие",auto:"ТТН / CMR",points:"Точки маршрута"}[kind];
+          if(!info?.available){setRestoreProgress(current=>({...current,completed:current.completed+1,label:`${title}: нет сохранённых данных`}));return false;}
+          setRestoreProgress(current=>({...current,label:`Загружаем «${title}»…`}));
+          const response=await fetch("/api/source-cache?kind="+kind);
+          if(!response.ok){setRestoreProgress(current=>({...current,completed:current.completed+1,label:`${title}: ошибка загрузки`}));return false;}
+          await load(kind,new File([await response.blob()],name),false,info.updatedAt);
+          setRestoreProgress(current=>({...current,completed:current.completed+1,label:`${title}: загружен`}));
+          return true;
+        };
+        const [serverCargo,serverAuto]=await Promise.all([restoreServer("cargo","TMS · Грузы текущие.xlsx"),restoreServer("auto","TMS · ТТН-CMR.xlsx")]);
+        if(serverCargo&&serverAuto) {
+          await restoreServer("points","TMS · Точки маршрута.xlsx");
+          setMessage("Используются сохранённые на сервере данные TMS. Можно продолжать поиск.");
+          setRestoreProgress(current=>({...current,active:false,completed:current.total,label:"Все справочники загружены"}));
+          return;
+        }
+        const [cargo,auto,routePoints]=await Promise.all([getSourceFile("cargo"),getSourceFile("auto"),getSourceFile("points")]);
+        if(cargo||auto) setMessage("Восстанавливаем ранее подключённые реестры…");
+        if(cargo) await load("cargo",cargo); if(auto) await load("auto",auto); if(routePoints) await load("points",routePoints);
+        if(cargo&&auto) setMessage("Реестры восстановлены из этого браузера. Можно продолжать поиск.");
+        setRestoreProgress(current=>({...current,active:false,completed:current.total,label:"Восстановление завершено"}));
       } catch { setMessage("Сохранённых реестров пока нет. Обновите данные из TMS.");setRestoreProgress(current=>({...current,active:false,label:"Сохранённые справочники не найдены"})); }
     })();
   }, []);
@@ -156,11 +185,49 @@ export default function Workspace() {
   const resetSources=async()=>{await clearSourceFiles();setCargoRows([]);setAutoRows([]);setPoints([]);setCargoSource(null);setAutoSource(null);setPointsSource(null);setResults([]);setQuery("");setMessage("Сохранённые реестры удалены. Подключите актуальные файлы.");};
 
   const ready = Boolean(cargoSource && autoSource);
+  const cargoIndex = useMemo(() => new Map<string,Row>(cargoRows.map((row):[string,Row] => [rowContainer(row),row]).filter(([key]) => Boolean(key))), [cargoRows]);
+  const autoIndex = useMemo(() => {
+    const map = new Map<string, Row>();
+    const supplementalFields = ["Водитель","ФИО водителя","Телефон водителя","Номер автомашины","Транспортное средство","Номер прицепа"];
+    const operationScore = (row: Row,expectedCarrier:string) =>
+      (expectedCarrier&&normalizeCompany(value(row,"Исполнитель","Перевозчик"))===normalizeCompany(expectedCarrier) ? 100 : 0) +
+      (value(row,"Водитель","ФИО водителя") ? 8 : 0) +
+      (value(row,"Номер автомашины","Транспортное средство") ? 8 : 0) +
+      (value(row,"Маршрут") ? 4 : 0) +
+      (value(row,"Исполнитель","Перевозчик") ? 4 : 0) +
+      (value(row,"Плановая дата отправления") ? 2 : 0) +
+      (value(row,"Плановая дата прибытия") ? 2 : 0);
+    autoRows.forEach((row) => {
+      const key = rowContainer(row);
+      if (!key) return;
+      const expectedCarrier=value(cargoIndex.get(key),"Перевозчик","Исполнитель");
+      const selected = map.get(key);
+      if (!selected) { map.set(key, {...row}); return; }
+      const preferCurrent = operationScore(row,expectedCarrier) > operationScore(selected,expectedCarrier);
+      const preferred = preferCurrent ? {...row} : {...selected};
+      const fallback = preferCurrent ? selected : row;
+      const sameCarrier=normalizeCompany(value(preferred,"Исполнитель","Перевозчик"))===normalizeCompany(value(fallback,"Исполнитель","Перевозчик"));
+      if(sameCarrier)supplementalFields.forEach((field) => {
+        if (!value(preferred,field) && value(fallback,field)) preferred[field]=fallback[field];
+      });
+      map.set(key,preferred);
+    });
+    return map;
+  }, [autoRows,cargoIndex]);
 
   const resolveDeparture = (auto: Row | undefined) => {
     const direct = value(auto, "Адрес места отправления", "Адрес отправления");
     if (direct) return direct;
     const start = routeStart(auto);
+    if (points.length && start) {
+      const needle = comparable(start);
+      const match = points.find((row) => {
+        const names = [value(row,"Название"), value(row,"Номер склада и название")].map(comparable).filter(Boolean);
+        return names.some((name) => name === needle || name.includes(needle) || needle.includes(name));
+      });
+      const address = value(match, "Адрес на русском языке", "Адрес");
+      if (address) return address;
+    }
     return value(auto, "Место отправления") || start || "Адрес отправления не найден";
   };
 
@@ -195,10 +262,12 @@ export default function Workspace() {
       const processLine=(line:string)=>{if(!line.trim())return;const event=JSON.parse(line);if(event.type==="status")setTmsStatuses(current=>({...current,[event.key]:{state:event.state,message:event.message,count:event.count,progress:event.progress}}));if(event.type==="fatal")throw new Error(event.error);if(event.type==="complete")completeResult=event.result;};
       while(true){const {done,value}=await reader.read();buffer+=decoder.decode(value||new Uint8Array(),{stream:!done});const lines=buffer.split(/\r?\n/);buffer=lines.pop()||"";for(const line of lines)processLine(line);if(done)break;} if(buffer)processLine(buffer);
       if(!completeResult) throw new Error("TMS не подтвердила завершение обновления");
-      const statusResponse=await fetch("/api/tms-status",{cache:"no-store"});if(!statusResponse.ok)throw new Error("Данные обновлены, но их статус недоступен");
-      const status=await statusResponse.json() as {sources?:Record<string,{available:boolean;updatedAt:string}|null>};
-      const source=(kind:string,name:string)=>status.sources?.[kind]?.available?{name,count:0,origin:"Сохранён на сервере",updatedAt:status.sources[kind]!.updatedAt}:null;
-      setCargoSource(source("cargo","TMS · Грузы текущие"));setAutoSource(source("auto","TMS · ТТН / CMR"));setPointsSource(source("points","TMS · Точки маршрута"));setResults([]);
+      const [cargoResponse,autoResponse,pointsResponse]=await Promise.all([fetch("/api/source-cache?kind=cargo"),fetch("/api/source-cache?kind=auto"),fetch("/api/source-cache?kind=points")]);
+      if(!cargoResponse.ok||!autoResponse.ok||!pointsResponse.ok) throw new Error("Данные получены, но сохранённые реестры не открылись");
+      const stamp=new Date().toLocaleString("ru-RU");
+      await load("cargo",new File([await cargoResponse.blob()],"TMS Грузы текущие · "+stamp+".xlsx"),false,new Date().toISOString());
+      await load("auto",new File([await autoResponse.blob()],"TMS ТТН-CMR · "+stamp+".xlsx"),false,new Date().toISOString());
+      await load("points",new File([await pointsResponse.blob()],"TMS Точки маршрута · "+stamp+".xlsx"),false,new Date().toISOString());
       setMessage("Данные и справочники TMS успешно обновлены");
     } catch(error) { const message=error instanceof Error?error.message:"Ошибка обновления TMS";setMessage(message);setTmsStatuses(current=>({...current,apply:{state:"error",message}})); }
     finally { setTmsBusy(false); }
@@ -239,12 +308,17 @@ export default function Workspace() {
     if(!participantId)return;const previousId=party.selectedId;setEdoChoiceStatus(current=>({...current,[party.key]:"Сохраняем…"}));setEdoChoices(current=>Object.fromEntries(Object.entries(current).map(([container,state])=>[container,{...state,parties:state.parties.map(item=>item.key===party.key?{...item,selectedId:participantId}:item)}])));
     try{const response=await fetch("/api/edo-preference",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:party.key,participantId,selectedBy:employee.trim()||"Пользователь"})});const result=await response.json();if(!response.ok)throw new Error(result.error||"Не удалось сохранить ID ЭДО");setEdoChoices(current=>Object.fromEntries(Object.entries(current).map(([container,state])=>[container,{...state,parties:state.parties.map(item=>item.key===party.key?{...item,selectedId:participantId,selectionSource:"manual",selectedBy:employee.trim()||"Пользователь",selectedAt:result.preference.selectedAt}:item)}])));setEdoChoiceStatus(current=>({...current,[party.key]:"✓ Сохранено"}));setMessage(`ID ЭДО для ${party.name} закреплён и будет использоваться после обновлений справочника.`);}catch(error){setEdoChoices(current=>Object.fromEntries(Object.entries(current).map(([container,state])=>[container,{...state,parties:state.parties.map(item=>item.key===party.key?{...item,selectedId:previousId}:item)}])));const text=error instanceof Error?error.message:"Не удалось сохранить ID ЭДО";setEdoChoiceStatus(current=>({...current,[party.key]:`Ошибка: ${text}`}));setMessage(text);}
   };
-  const search = async () => {
+  const search = () => {
     if (!ready) return setMessage("Сначала подключите оба обязательных реестра");
     const containers = Array.from(new Set(query.split(/[\s,;]+/).map(normalizeContainer).filter(Boolean)));
     if (!containers.length) return setMessage("Вставьте номера контейнеров в формате ABCD1234567");
-    setBusy(true);setMessage("Ищем контейнеры в сохранённых данных TMS…");
-    try{const response=await fetch("/api/trips/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({containers,user:employee.trim()||"Пользователь"})});const result=await response.json();if(!response.ok)throw new Error(result.error||"Не удалось выполнить поиск");const found=(result.items||[]).map((item:{container:string;cargo?:Row;auto?:Row;missingCargo:boolean;missingAuto:boolean})=>({...item.cargo,...item.auto,_container:item.container,_cargo:item.cargo,_auto:item.auto,_missingCargo:item.missingCargo,_missingAuto:item.missingAuto} as Trip));setResults(found);void loadEdoChoices(found);setMessage('Найдено в обоих реестрах: '+found.filter((item:Trip)=>!item._missingCargo&&!item._missingAuto).length+' из '+containers.length);}catch(error){setMessage(error instanceof Error?error.message:"Не удалось выполнить поиск");}finally{setBusy(false);}
+    const found = containers.map((container) => {
+      const cargo = cargoIndex.get(container); const auto = autoIndex.get(container);
+      return { ...(cargo ?? {}), ...(auto ?? {}), _container: container, _cargo: cargo, _auto: auto, _missingCargo: !cargo, _missingAuto: !auto } as Trip;
+    });
+    setResults(found);
+    void loadEdoChoices(found);
+    setMessage('Найдено в обоих реестрах: ' + found.filter((item) => !item._missingCargo && !item._missingAuto).length + ' из ' + containers.length);
   };
 
   const chooseOutputFolder = async () => {

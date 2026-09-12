@@ -63,7 +63,7 @@ function saveKonturTokens(tokens) {
   fs.writeFileSync(konturTokenFile,JSON.stringify(tokens),{encoding:"utf8",mode:0o600});
   try { fs.chmodSync(konturTokenFile,0o600); } catch { /* Windows does not support POSIX modes */ }
 }
-async function exchangeKonturToken(parameters) {
+async function exchangeKonturToken(parameters,{persist=true}={}) {
   const config=konturConfig();
   const response=await fetch(`${konturIdentityUrl}/connect/token`,{
     method:"POST",
@@ -74,9 +74,12 @@ async function exchangeKonturToken(parameters) {
   const text=await response.text();
   let result; try { result=JSON.parse(text); } catch { result={error_description:text}; }
   if(!response.ok||!result.access_token) throw new Error(result.error_description||result.error||`Контур вернул HTTP ${response.status}`);
-  const previous=loadKonturTokens()||{};
+  // Preserve a rotated refresh token only while refreshing the same session.
+  // A new user login must never inherit credentials from the previous account.
+  const previous=parameters.grant_type==="refresh_token"?(loadKonturTokens()||{}):{};
   const tokens={...previous,...result,expires_at:Date.now()+Number(result.expires_in||3600)*1000};
-  saveKonturTokens(tokens); return tokens;
+  if(persist)saveKonturTokens(tokens);
+  return tokens;
 }
 async function getKonturAccessToken() {
   const tokens=loadKonturTokens();
@@ -382,16 +385,17 @@ const server = http.createServer((request, response) => {
   if (request.method === "GET" && url.pathname === "/api/kontur/callback") {
     void (async()=>{
       const cookies=requestCookies(request);const state=url.searchParams.get("state")||""; const expectedState=cookies.kontur_oauth_state||"";const returnTo=cookies.kontur_return_to==="/control"?"/control":"/workspace";
-      let receivedNewTokens=false;
       try {
         if(url.searchParams.get("error")) throw new Error(url.searchParams.get("error_description")||url.searchParams.get("error"));
         if(!state||!expectedState||state!==expectedState) throw new Error("Проверка state не пройдена или время входа истекло");
         const code=url.searchParams.get("code"); if(!code) throw new Error("Контур не вернул код авторизации");
-        const tokens=await exchangeKonturToken({grant_type:"authorization_code",code,redirect_uri:konturConfig().redirectUri});
-        receivedNewTokens=true;
+        // Do not replace the shared server session until this account is
+        // confirmed to have access to the configured Diadoc box.
+        const tokens=await exchangeKonturToken({grant_type:"authorization_code",code,redirect_uri:konturConfig().redirectUri},{persist:false});
         await verifyKonturBox(tokens.access_token);
+        saveKonturTokens(tokens);
         response.writeHead(302,{Location:`${returnTo}?kontur=connected`,"Set-Cookie":[konturStateCookie("",0),konturReturnCookie("",0)],"Cache-Control":"no-store"}); response.end();
-      } catch(error){if(receivedNewTokens)try{fs.unlinkSync(konturTokenFile);}catch{}response.writeHead(302,{Location:`${returnTo}?kontur=error&message=${encodeURIComponent(error.message||"Ошибка авторизации")}`,"Set-Cookie":[konturStateCookie("",0),konturReturnCookie("",0)],"Cache-Control":"no-store"});response.end();}
+      } catch(error){response.writeHead(302,{Location:`${returnTo}?kontur=error&message=${encodeURIComponent(error.message||"Ошибка авторизации")}`,"Set-Cookie":[konturStateCookie("",0),konturReturnCookie("",0)],"Cache-Control":"no-store"});response.end();}
     })(); return;
   }
   if (request.method === "POST" && url.pathname === "/api/kontur/draft") {

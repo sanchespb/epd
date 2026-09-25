@@ -39,6 +39,11 @@ const vehicleFields = {
   LIST_TYPE_MODEL_AUTO_NAME:"Марка", LIST_TYPE_VAN_NAME:"Тип кузова", CHASSIS_NUMBER_AUTO:"Номер шасси",
   VIN_NUMBER_AUTO:"VIN номер", NOTE:"Примечание",
 };
+const vehicleOwnershipFieldCandidates = [
+  "OWNERSHIP_TYPE", "LIST_TYPE_OWNERSHIP_NAME", "LIST_TYPE_PROPERTY_NAME",
+  "LIST_TYPE_OWNER_AUTO_NAME", "TYPE_OWNERSHIP_NAME", "OWNERSHIP_TYPE_NAME",
+  "TYPE_OWNER_NAME",
+];
 const driverFields = {
   ID:"Номер записи", FULL_NAME:"Полное имя", DRIVER_NAME:"Имя", SURNAME:"Фамилия", PATRONYMIC:"Отчество",
   LIST_COMPANY_NAME:"Автоперевозчик", PHONE1:"Телефон 1", PHONE2:"Телефон 2", DOC_DATE:"Дата выдачи паспорта",
@@ -291,6 +296,12 @@ async function firstSupportedField(session,table,candidates){
   return "";
 }
 
+async function getVehicleRows(session,onProgress=()=>{}) {
+  const ownershipField=await firstSupportedField(session,"LIST_AUTO",vehicleOwnershipFieldCandidates);
+  if(!ownershipField)throw new Error("TMS не предоставила поле «Тип владения» реестра автомашин");
+  const fields={...vehicleFields,[ownershipField]:"Тип владения"};
+  return getRows(session,"LIST_AUTO",fields,null,"",onProgress);
+}
 async function getContractRows(session,onProgress){
   const fields={ID:"Номер записи"};
   for(const [label,candidates] of Object.entries(contractFieldCandidates)){
@@ -440,7 +451,7 @@ export async function syncTms({ login: loginName, password, captcha = "", cacheD
     onStatus(key,"working","Получаем данные…");
     try {
       const progress=(count,message,progressValue)=>onStatus(key,"working",message,{count,progress:progressValue});
-      const rows=key==="drivers"?await getDriverRows(session,progress):key==="points"?await getWarehouseRows(session,progress):key==="auto"?await getAutoRows(session,filter,minimumDate,progress):key==="cargo"?await getCargoRows(session,filter,minimumDate,progress):key==="contracts"?await getContractRows(session,progress):await getRows(session,table,fields,filter,minimumDate,progress);
+      const rows=key==="drivers"?await getDriverRows(session,progress):key==="vehicles"?await getVehicleRows(session,progress):key==="points"?await getWarehouseRows(session,progress):key==="auto"?await getAutoRows(session,filter,minimumDate,progress):key==="cargo"?await getCargoRows(session,filter,minimumDate,progress):key==="contracts"?await getContractRows(session,progress):await getRows(session,table,fields,filter,minimumDate,progress);
       if(!rows.length) throw new Error("реестр пуст");
       const target=path.join(targetDir,filename);
       const savedRows=(key==="cargo"||key==="auto")?mergeTransportCache(target,table,rows):rows;

@@ -5,7 +5,7 @@ from pathlib import Path
 from address_xml import known_gar, complete_gar
 from data_sources import Catalogs
 from server_generator import Generator as ServerGenerator
-from xml_generator import Generator, TAGLEX, address_attributes, _set_address, _set_contract, cargo_packaging, known_point_phone, normalize_vehicle_number, party
+from xml_generator import Generator, TAGLEX, address_attributes, _set_address, _set_contract, cargo_packaging, known_point_phone, normalize_vehicle_number, party, vehicle_ownership_details
 
 
 class AddressRegressions(unittest.TestCase):
@@ -28,7 +28,7 @@ class AddressRegressions(unittest.TestCase):
             self.assertEqual(len(wrapper.findall('АдрФИАС/Здание')), 2)
             self.assertIsNotNone(wrapper.find('АдрФИАС/ЭлУлДорСети'))
 
-    def test_taglex_fias_in_order_and_both_etrn_types(self):
+    def test_taglex_legal_address_in_order_and_both_etrn_types(self):
         generator = Generator(Path(__file__).parent / "resources", Catalogs())
         context = generator.context({
             "_container": "FESU5281584",
@@ -39,14 +39,17 @@ class AddressRegressions(unittest.TestCase):
         for empty in (False, True):
             _, content = generator.etrn(context, empty=empty)
             root = ET.fromstring(content)
-            self.assertEqual(root.find(".//СвГО//Адрес/АдрФИАС").get("ИдНом"), expected_fias)
+            shipper_address = root.find(".//СвГО//Адрес")
+            self.assertIsNone(shipper_address.find("АдрФИАС"))
+            self.assertEqual(shipper_address.find("АдрРФ").get("Индекс"), "115191")
+            self.assertEqual(shipper_address.find("АдрРФ").get("Дом"), "5")
             if empty:
                 self.assertEqual(root.find(".//СвГП//Адрес/АдрФИАС").get("ИдНом"), expected_fias)
         _, content = generator.ezz(context)
         root = ET.fromstring(content)
         self.assertEqual(root.find(".//СвГО/Адрес/АдрФИАС").get("ИдНом"), expected_fias)
 
-    def test_vehicle_rental_note_does_not_change_etrn_ownership(self):
+    def test_vehicle_rental_note_fills_both_etrn_types(self):
         catalogs = Catalogs()
         catalogs.vehicles = [{
             "Государственный номер": "В512ММ98",
@@ -59,8 +62,39 @@ class AddressRegressions(unittest.TestCase):
         for empty in (False, True):
             _, content = generator.etrn(context, empty=empty)
             truck = ET.fromstring(content).find(".//СвТС/ТС")
-            self.assertEqual(truck.get("ТипВлад"), "1")
-            self.assertIsNone(truck.find("ОснАрЛиз"))
+            self.assertEqual(truck.get("ТипВлад"), "3")
+            basis = truck.find("ОснАрЛиз")
+            self.assertEqual(basis.get("НаимДок"), "Договор аренды")
+            self.assertEqual(basis.get("НомерДок"), "бн")
+            self.assertEqual(basis.get("ДатаДок"), "14.01.2026")
+            self.assertEqual(basis.findtext("ИдРекСост/ИННФЛ"), "781133069839")
+
+    def test_vehicle_lease_uses_same_note_fields(self):
+        details = vehicle_ownership_details({
+            "Тип владения": "Лизинг",
+            "Примечание": "Договор №Л-42 от 02.02.2026, ИНН 7701234567",
+        })
+        self.assertEqual(details, {
+            "ownership_code": "4", "contract_title": "Договор лизинга",
+            "number": "Л-42", "date": "02.02.2026", "owner_inn": "7701234567",
+        })
+        catalogs = Catalogs()
+        catalogs.vehicles = [{"Государственный номер": "В512ММ98", "Марка": "Скания",
+                              "Тип владения": "Лизинг", "Примечание": "№Л-42 от02.02.2026 ИНН 7701234567"}]
+        generator = Generator(Path(__file__).parent / "resources", catalogs)
+        context = generator.context({"_container": "MIOU4934154", "Номер автомашины": "В512ММ98"}, date(2026, 8, 31), "Иванов Иван Иванович", None)
+        for empty in (False, True):
+            _, content = generator.etrn(context, empty=empty)
+            truck = ET.fromstring(content).find(".//СвТС/ТС")
+            self.assertEqual(truck.get("ТипВлад"), "4")
+            self.assertEqual(truck.find("ОснАрЛиз").get("НаимДок"), "Договор лизинга")
+            self.assertEqual(truck.findtext("ОснАрЛиз/ИдРекСост/ИННЮЛ"), "7701234567")
+
+    def test_vehicle_contract_details_are_required_for_rental_and_lease(self):
+        for ownership in ("Аренда", "Лизинг"):
+            with self.subTest(ownership=ownership), self.assertRaisesRegex(ValueError, "ИНН"):
+                vehicle_ownership_details({"Тип владения": ownership, "Примечание": "№бн от14.01.2026"})
+        self.assertIsNone(vehicle_ownership_details({"Тип владения": "Собственность", "Примечание": ""}))
 
     def test_incomplete_gar_fallback(self):
         text = '173008, Новгородская обл, Великий Новгород г, Магистральная ул, дом № 11/13'

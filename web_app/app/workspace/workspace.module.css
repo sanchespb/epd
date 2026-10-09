@@ -123,3 +123,6 @@
 .tripFacts summary{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;list-style:none;font-size:14px;font-weight:700}.tripFacts summary::-webkit-details-marker{display:none}.tripFacts summary:after{content:"⌄";font-size:19px;color:#54727f}.tripFacts[open] summary:after{content:"⌃"}.tripFacts summary small{margin-left:auto;color:#69818b;font-size:10px;font-weight:400}.tripFacts>div{margin-top:15px}
 @media(max-width:950px){.tripCard .tripCardGrid{grid-template-columns:1fr}.tripCard .tripEdo{grid-template-columns:1fr}.tripCard .tripMeta{grid-template-columns:1fr 1fr}}
 @media(max-width:600px){.tripCardsTitle{display:block}.tripCard .tripDocumentRow{flex-wrap:wrap}.tripCard .tripDocumentSelect{flex-basis:100%}.tripCard .tripMeta{grid-template-columns:1fr}}
+.tripCard .tripEdo>div.tripEdoMissing{border-color:#e88980;background:#fff1ef;box-shadow:inset 3px 0 #d94f45}
+.tripCard .tripEdo .tripEdoMissing em,.tripCard .tripEdo .tripEdoMissing>small{color:#a52e28;font-weight:700}
+.tripCard .tripEdo .tripEdoMissing select{border-color:#d9766e;color:#8f2923}

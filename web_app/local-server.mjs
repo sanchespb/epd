@@ -8,7 +8,8 @@ import { randomBytes } from "node:crypto";
 import * as XLSX from "xlsx";
 import { syncTms, contractRowsToCatalog, generateTmsCaptcha, TmsCaptchaError } from "./tms-sync.mjs";
 import { isTmsApiConfigured, resolveTmsCredentials } from "./tms-credentials.mjs";
-import { activeForwardingDrafts, containsContainer } from "./kontur-document-presence.mjs";
+import { konturDocumentUrl, logisticsIdFromCustomData, verifiedForwardingUrl } from "./kontur-document-links.mjs";
+import { draftMessageToPost, savedDraftDocument } from "./kontur-draft.mjs";
 import { loadMonthlyDocuments } from "./statistics-pagination.mjs";
 import { isInternationalTruckUnit } from "./statistics-unit-filter.mjs";
 
@@ -28,6 +29,7 @@ const captchaDataUrl = image => {
 const cacheRoot = path.join(root,"work","source-cache");
 const konturTokenFile = path.join(root,"work","kontur-tokens.json");
 const referenceRoot = process.env.AGR_REFERENCES_DIR || path.join(root,"..","data","references");
+const forwardingLinks = JSON.parse(fs.readFileSync(path.join(root,"forwarding-logistics-links.json"),"utf8"));
 const manualCorrectionsFile = path.join(referenceRoot,"manual-document-corrections.json");
 const manualCorrectionKeys = new Set(["contract_number","contract_date","owner_inn","phone","driver_name","driver_phone","driver_license","loading","delivery","name","inn"]);
 const loadManualCorrections=()=>{try{const data=JSON.parse(fs.readFileSync(manualCorrectionsFile,"utf8"));return data&&typeof data==="object"&&!Array.isArray(data)?data:{};}catch{return {};}};
@@ -136,7 +138,7 @@ async function createKonturDraft(jobId,payload){
     setKonturDraftJob(jobId,{state:"working",phase:"authorization",message:"Получаем действующий токен Контур"});
     const accessToken=await getKonturAccessToken();
     const operationId=randomBytes(16).toString("hex");
-    const requestBody=JSON.stringify({FromBoxId:config.boxId,IsDraft:true,StrictDraftValidation:false,DocumentAttachments:[{SignedContent:{Content:payload.content},...format}]});
+    const requestBody=JSON.stringify(draftMessageToPost({fromBoxId:config.boxId,recipientBoxId:payload.recipientBoxId,kind:payload.kind,content:payload.content,format}));
     const deadline=Date.now()+90_000; let apiResponse; let result={}; let attempt=0;
     while(Date.now()<deadline){
       attempt++;
@@ -162,9 +164,8 @@ async function createKonturDraft(jobId,payload){
       break;
     }
     if(!apiResponse||apiResponse.status===204) throw new Error("Диадок продолжает обрабатывать черновик дольше 90 секунд. Повторите передачу позднее.");
-    const document=result.Entities?.find(item=>item.EntityType==="Attachment")||result.Entities?.[0];
+    const document=savedDraftDocument(result,payload.kind==="forwarding"?payload.recipientBoxId:"");
     setKonturDraftJob(jobId,{state:"saved",phase:"complete",message:"Черновик создан",messageId:result.MessageId||null,entityId:document?.EntityId||null});
-    if(payload.kind==="forwarding")forwardingDraftCache.expiresAt=0;
   } catch(error) {
     const message=error?.name==="TimeoutError"?"Контур не ответил за 90 секунд. Проверьте доступность API и повторите передачу":error.message||"Не удалось создать черновик в Контуре";
     setKonturDraftJob(jobId,{state:"error",phase:"failed",message});
@@ -243,36 +244,6 @@ async function syncKonturCounteragents(onProgress=()=>{}){
 }
 let counteragentSyncPromise=null;
 const runCounteragentSync=onProgress=>{if(!counteragentSyncPromise)counteragentSyncPromise=syncKonturCounteragents(onProgress).finally(()=>{counteragentSyncPromise=null;});return counteragentSyncPromise;};
-const konturDocumentUrl=(boxId,messageId,logisticsId,typeNamedId)=>{
-  const normalizedBoxId=String(boxId||"").replace(/@diadoc\.ru$/i,"");
-  if(typeNamedId==="LogisticsWaybill"&&normalizedBoxId&&logisticsId)return `https://logist.kontur.ru/${encodeURIComponent(normalizedBoxId)}/consignor/sign/waybill/${encodeURIComponent(logisticsId)}`;
-  if(typeNamedId==="LogisticsForwardingOrder"&&normalizedBoxId&&logisticsId)return `https://logist.kontur.ru/${encodeURIComponent(normalizedBoxId)}/consignor/sign/forwardingOrder/${encodeURIComponent(logisticsId)}`;
-  if(typeNamedId==="LogisticsOrderRequest"&&normalizedBoxId&&messageId&&logisticsId)return `https://diadoc.kontur.ru/${encodeURIComponent(normalizedBoxId)}/Document/Show?letterId=${encodeURIComponent(messageId)}&documentId=${encodeURIComponent(logisticsId)}`;
-  const template=process.env.KONTUR_DOCUMENT_URL_TEMPLATE||"";
-  return template?template.replaceAll("{boxId}",encodeURIComponent(normalizedBoxId)).replaceAll("{messageId}",encodeURIComponent(messageId)).replaceAll("{entityId}",encodeURIComponent(logisticsId)):null;
-};
-let forwardingDraftCache={expiresAt:0,items:[],pending:null};
-async function loadActiveForwardingDrafts(accessToken,boxId){
-  if(forwardingDraftCache.expiresAt>Date.now())return forwardingDraftCache.items;
-  if(forwardingDraftCache.pending)return forwardingDraftCache.pending;
-  forwardingDraftCache.pending=(async()=>{
-    const events=[];let afterIndexKey="",complete=false;
-    for(let page=0;page<20;page++){
-      const body={MessageTypes:["Draft"],TypeNamedIds:["LogisticsForwardingOrder"],Limit:100,PopulateDocuments:true,Filter:{SortDirection:"Descending"},...(afterIndexKey?{AfterIndexKey:afterIndexKey}:{})};
-      const result=await diadocJson(`/V4/GetDocflowEvents?boxId=${encodeURIComponent(boxId)}`,accessToken,{method:"POST",body:JSON.stringify(body)});
-      const portion=result.Events||[];events.push(...portion);
-      if(portion.length<100){complete=true;break;}
-      const next=portion.at(-1)?.IndexKey||"";
-      if(!next||next===afterIndexKey)throw new Error("Не удалось прочитать все страницы черновиков ПЭ из Диадока");
-      afterIndexKey=next;
-    }
-    if(!complete)throw new Error("Слишком много событий черновиков ПЭ: проверка неполная");
-    forwardingDraftCache.items=activeForwardingDrafts(events);
-    forwardingDraftCache.expiresAt=Date.now()+60_000;
-    return forwardingDraftCache.items;
-  })();
-  try{return await forwardingDraftCache.pending;}finally{forwardingDraftCache.pending=null;}
-}
 let signingControlCache={expiresAt:0,value:null};
 const statisticsCache=new Map();
 const actualDeliveryValue=row=>row["Фактическая дата доставки на склад"]||row["Фактическая дата прибытия"]||row["Фактическая дата доставки"]||row["Actual delivery date"]||"";
@@ -290,7 +261,7 @@ async function loadDocumentStatistics(month,force=false){
   const docflows=[],boxesById=new Map();for(let offset=0;offset<unique.length;offset+=100){const part=unique.slice(offset,offset+100);const response=await diadocJson(`/V5/GetDocflows?boxId=${encodeURIComponent(config.boxId)}`,accessToken,{method:"POST",body:JSON.stringify({Requests:part.map(item=>({DocumentId:{MessageId:item.MessageId,EntityId:item.EntityId}}))})});docflows.push(...(response.Documents||[]));for(const box of response.ReferenceData?.Boxes||[]){const name=box.OrganizationFullName||box.OrganizationShortName||box.BoxTitle;if(box.BoxId&&name)boxesById.set(String(box.BoxId).toLowerCase(),name);}}
   const flowById=new Map(docflows.map(item=>[`${item.DocumentId?.MessageId}:${item.DocumentId?.EntityId}`,item]));
   const participantBoxIds=new Set(unique.map(item=>item.CounteragentBoxId).filter(Boolean));for(const flow of docflows)for(const title of flow.Docflow?.Titles||[])if(title.Author?.BoxId&&!title.Author.IsCurrentBox)participantBoxIds.add(title.Author.BoxId);await mapLimit([...participantBoxIds],8,async boxId=>{const key=String(boxId).toLowerCase();if(boxesById.has(key))return;try{const box=await diadocJson(`/GetBox?boxId=${encodeURIComponent(boxId)}`,accessToken);const name=box.Organization?.FullName||box.Organization?.ShortName||box.Title;if(name)boxesById.set(key,name);}catch{}});
-  const items=await mapLimit(unique,8,async document=>{const flow=flowById.get(`${document.MessageId}:${document.EntityId}`);if(flow?.DocumentInfo?.IsDeleted)return null;const customData=Object.fromEntries((document.CustomData||[]).map(item=>[item.Key,item.Value]));let xml="";try{xml=await diadocEntityText(accessToken,config.boxId,document.MessageId,document.EntityId);}catch{}const deliveryDate=epdDateTime(xmlAttribute(xml,"ДатВрДостГр")||xmlAttribute(xml,"DeliveryDateTime")),deliveryTimestamp=deliveryDate.getTime();const titles=flow?.Docflow?.Titles||[],title1=titles.find(title=>Number(title.TitleIndex)===0),title2=titles.find(title=>Number(title.TitleIndex)===1),title3=titles.find(title=>Number(title.TitleIndex)===2),title1or2Signed=title1?.AuthorSigning?.IsFinished===true||title2?.AuthorSigning?.IsFinished===true,title2Signed=title2?.AuthorSigning?.IsFinished===true,isReception=String(customData["kl-func"]||"").toLowerCase()==="reception",title3Signed=title3?.AuthorSigning?.IsFinished===true||(isReception&&title1?.AuthorSigning?.IsFinished===true);let title2Xml="";const title2EntityId=title2?.Version?.EntityId;if(title2EntityId&&title2EntityId!==document.EntityId){try{title2Xml=await diadocEntityText(accessToken,config.boxId,document.MessageId,title2EntityId);}catch{}}const firstParty=(source,...tags)=>tags.map(tag=>xmlParty(source,tag)).find(value=>value!=="Не указано")||"";const carrier=firstParty(title2Xml,"СвПер","СвИсп")||boxesById.get(String(title2?.Author?.BoxId||"").toLowerCase())||firstParty(xml,"СвПер","СвИсп")||"Не указано",consignee=boxesById.get(String(title3?.Author?.BoxId||"").toLowerCase())||firstParty(xml,"СвГП")||"Не указано";const rawDate=document.DocumentDate||document.CreationTimestamp||"";const match=String(rawDate).match(/^(\d{2})\.(\d{2})\.(\d{4})/);const parsed=match?new Date(`${match[3]}-${match[2]}-${match[1]}T00:00:00+03:00`):new Date(rawDate);const month=Number.isNaN(parsed.getTime())?"Не определён":`${parsed.getFullYear()}-${String(parsed.getMonth()+1).padStart(2,"0")}`;const containers=[...new Set(String(xml).match(/[A-Z]{4}\d{7}/g)||[])];return {messageId:document.MessageId,logisticsId:customData["kl-id"]||"",month,carrier,consignee,title1or2Signed,carrierTitle2Signed:title2Signed,consigneeTitle3Signed:title3Signed,number:document.DocumentNumber||xmlAttribute(xml,"НомерТрН")||"Без номера",containers,documentUrl:konturDocumentUrl(config.boxId,document.MessageId,customData["kl-id"]||document.EntityId,"LogisticsWaybill"),deliveryTimestamp:Number.isNaN(deliveryTimestamp)?null:deliveryTimestamp,deliveryDate:Number.isNaN(deliveryTimestamp)?"":new Intl.DateTimeFormat("ru-RU",{timeZone:"Europe/Moscow"}).format(deliveryDate)};});
+  const items=await mapLimit(unique,8,async document=>{const flow=flowById.get(`${document.MessageId}:${document.EntityId}`);if(flow?.DocumentInfo?.IsDeleted)return null;const customData=Object.fromEntries((document.CustomData||[]).map(item=>[item.Key,item.Value]));let xml="";try{xml=await diadocEntityText(accessToken,config.boxId,document.MessageId,document.EntityId);}catch{}const deliveryDate=epdDateTime(xmlAttribute(xml,"ДатВрДостГр")||xmlAttribute(xml,"DeliveryDateTime")),deliveryTimestamp=deliveryDate.getTime();const titles=flow?.Docflow?.Titles||[],title1=titles.find(title=>Number(title.TitleIndex)===0),title2=titles.find(title=>Number(title.TitleIndex)===1),title3=titles.find(title=>Number(title.TitleIndex)===2),title1or2Signed=title1?.AuthorSigning?.IsFinished===true||title2?.AuthorSigning?.IsFinished===true,title2Signed=title2?.AuthorSigning?.IsFinished===true,isReception=String(customData["kl-func"]||"").toLowerCase()==="reception",title3Signed=title3?.AuthorSigning?.IsFinished===true||(isReception&&title1?.AuthorSigning?.IsFinished===true);let title2Xml="";const title2EntityId=title2?.Version?.EntityId;if(title2EntityId&&title2EntityId!==document.EntityId){try{title2Xml=await diadocEntityText(accessToken,config.boxId,document.MessageId,title2EntityId);}catch{}}const firstParty=(source,...tags)=>tags.map(tag=>xmlParty(source,tag)).find(value=>value!=="Не указано")||"";const carrier=firstParty(title2Xml,"СвПер","СвИсп")||boxesById.get(String(title2?.Author?.BoxId||"").toLowerCase())||firstParty(xml,"СвПер","СвИсп")||"Не указано",consignee=boxesById.get(String(title3?.Author?.BoxId||"").toLowerCase())||firstParty(xml,"СвГП")||"Не указано";const rawDate=document.DocumentDate||document.CreationTimestamp||"";const match=String(rawDate).match(/^(\d{2})\.(\d{2})\.(\d{4})/);const parsed=match?new Date(`${match[3]}-${match[2]}-${match[1]}T00:00:00+03:00`):new Date(rawDate);const month=Number.isNaN(parsed.getTime())?"Не определён":`${parsed.getFullYear()}-${String(parsed.getMonth()+1).padStart(2,"0")}`;const containers=[...new Set(String(xml).match(/[A-Z]{4}\d{7}/g)||[])];return {messageId:document.MessageId,logisticsId:customData["kl-id"]||"",month,carrier,consignee,title1or2Signed,carrierTitle2Signed:title2Signed,consigneeTitle3Signed:title3Signed,number:document.DocumentNumber||xmlAttribute(xml,"НомерТрН")||"Без номера",containers,documentUrl:konturDocumentUrl(config.boxId,document.MessageId,document.EntityId,"LogisticsWaybill",customData["kl-id"]),deliveryTimestamp:Number.isNaN(deliveryTimestamp)?null:deliveryTimestamp,deliveryDate:Number.isNaN(deliveryTimestamp)?"":new Intl.DateTimeFormat("ru-RU",{timeZone:"Europe/Moscow"}).format(deliveryDate)};});
   const merged=new Map();for(const item of items.filter(Boolean)){const hasStableNumber=item.number&&!/^(?:б\/н|Без номера)$/iu.test(item.number),logicalKey=item.logisticsId||(hasStableNumber?`${item.month}:${item.number}`:item.messageId);const current=merged.get(logicalKey);if(!current){merged.set(logicalKey,item);continue;}current.title1or2Signed=current.title1or2Signed||item.title1or2Signed;current.carrierTitle2Signed=current.carrierTitle2Signed||item.carrierTitle2Signed;current.consigneeTitle3Signed=current.consigneeTitle3Signed||item.consigneeTitle3Signed;if(current.carrier==="Не указано"&&item.carrier!=="Не указано")current.carrier=item.carrier;if(current.consignee==="Не указано"&&item.consignee!=="Не указано")current.consignee=item.consignee;if(current.deliveryTimestamp===null&&item.deliveryTimestamp!==null){current.deliveryTimestamp=item.deliveryTimestamp;current.deliveryDate=item.deliveryDate;}current.containers=[...new Set([...current.containers,...item.containers])];}
   const now=Date.now(),completed=[...merged.values()].filter(item=>item.deliveryTimestamp!==null&&item.deliveryTimestamp<=now).map(({logisticsId,deliveryTimestamp,...item})=>item),tmsTrips=loadTmsActualTrips(completed,month);const value={generatedAt:new Date().toISOString(),fromMonth:"2026-09",items:completed.filter(item=>month==="all"||item.month===month),tmsTrips};statisticsCache.set(cacheKey,{expiresAt:Date.now()+10*60_000,value});return value;
 }
@@ -318,7 +289,7 @@ async function loadSigningControl(){
       else if(titleNumber===4){controlDate=new Date(xmlAttribute(xml,"ФДатВрУбыт")||xmlAttribute(xml,"ActualDepartureDateTime")||xmlAttribute(xml,"ФДатВрПриб")||"");controlDateLabel="Фактическое завершение выгрузки";}
       if(!controlDate||Number.isNaN(controlDate.getTime()))controlDate=documentDate(document.DocumentDate)||ticksToDate(document.SendTimestampTicks)||new Date(document.CreationTimestamp||Date.now());const delay=describeDelay(controlDate);
       const agreed=Boolean(title.agreed);const responsible=isForwarding?(forwardingDirection==="incoming"?"Мы":"Экспедитор"):titleNumber===3?"Грузополучатель":titleNumber===1?"Грузоотправитель":"Перевозчик";
-      return {id:`${document.MessageId}:${document.EntityId}:${titleNumber}`,documentType:isForwarding?"Поручение экспедитору":isOrder?"Заявка":"ЭТрН",workflowGroup:isForwarding?forwardingDirection:null,direction:isForwarding?forwardingDirection:null,agreed,serviceCost,number:document.DocumentNumber||xmlAttribute(xml,isForwarding?"НомДок":isOrder?"НомерЗаяв":"НомерТрН")||"Без номера",container,client,carrier,consignee,waitingTitle:agreed?"Согласовано":`Т${titleNumber}`,responsible,status:agreed?"agreed":delay.status,statusText:agreed?"Подписано экспедитором":isForwarding&&forwardingDirection==="incoming"?"Требуется наша подпись":`Ожидается подпись: ${responsible.toLowerCase()}`,controlDate:controlDate.toISOString(),controlDateLabel,overdueText:agreed?"Согласовано":delay.text,messageId:document.MessageId,entityId:document.EntityId,sourceMessageId,sourceEntityId,documentUrl:konturDocumentUrl(config.boxId,document.MessageId,customData["kl-id"]||sourceEntityId,document.TypeNamedId)};});
+      return {id:`${document.MessageId}:${document.EntityId}:${titleNumber}`,documentType:isForwarding?"Поручение экспедитору":isOrder?"Заявка":"ЭТрН",workflowGroup:isForwarding?forwardingDirection:null,direction:isForwarding?forwardingDirection:null,agreed,serviceCost,number:document.DocumentNumber||xmlAttribute(xml,isForwarding?"НомДок":isOrder?"НомерЗаяв":"НомерТрН")||"Без номера",container,client,carrier,consignee,waitingTitle:agreed?"Согласовано":`Т${titleNumber}`,responsible,status:agreed?"agreed":delay.status,statusText:agreed?"Подписано экспедитором":isForwarding&&forwardingDirection==="incoming"?"Требуется наша подпись":`Ожидается подпись: ${responsible.toLowerCase()}`,controlDate:controlDate.toISOString(),controlDateLabel,overdueText:agreed?"Согласовано":delay.text,messageId:document.MessageId,entityId:document.EntityId,sourceMessageId,sourceEntityId,documentUrl:konturDocumentUrl(config.boxId,document.MessageId,document.EntityId,document.TypeNamedId,customData["kl-id"])};});
   })).flat();
   return {source:"kontur",generatedAt:new Date().toISOString(),connected:true,user:konturUserInfo(loadKonturTokens()),items,note:null};
 }
@@ -527,10 +498,10 @@ const server = http.createServer((request, response) => {
       const containers=[...new Set((Array.isArray(requested)?requested:[]).map(value=>String(value||"").trim().toUpperCase()).filter(value=>/^[A-Z]{4}\d{7}$/.test(value)))].slice(0,20);
       if(!containers.length)throw new Error("Не указаны номера контейнеров");
       const config=konturConfig(),accessToken=await getKonturAccessToken();
-      const drafts=await loadActiveForwardingDrafts(accessToken,config.boxId);
       const items=await mapLimit(containers,3,async container=>{
         const found={cargo:false,order:false,empty:false,forwarding:false};
         const links={};
+        let forwardingLocation=null;
         const result=await diadocJson(`/V5/SearchDocflows?boxId=${encodeURIComponent(config.boxId)}`,accessToken,{method:"POST",body:JSON.stringify({QueryString:container,Scope:"SearchScopeAny",Count:100})});
         for(const item of result.Documents||[]){
           if(item.DocumentInfo?.IsDeleted)continue;
@@ -545,11 +516,26 @@ const server = http.createServer((request, response) => {
           else if(type==="LogisticsForwardingOrder")kind="forwarding";
           else if(/(?:^|[-_\s])EMPTY(?:$|[-_\s])/i.test(number)||/Порожн/i.test(xml))kind="empty";
           else if(/(?:^|[-_\s])CARGO(?:$|[-_\s])/i.test(number)||/СвГруз|Грузоотпр/i.test(xml))kind="cargo";
-          if(kind){found[kind]=true;links[kind] ||= konturDocumentUrl(config.boxId,id.MessageId,id.EntityId,type);}
+          if(kind==="forwarding"){
+            const logisticsId=logisticsIdFromCustomData(info.CustomData);
+            if(info.MessageType==="Letter"){
+              found.forwarding=true;
+              const location=logisticsId?"logistics":"diadoc";
+              if(!links.forwarding||location==="logistics"){
+                links.forwarding=konturDocumentUrl(config.boxId,id.MessageId,id.EntityId,type,logisticsId,info.MessageType);
+                forwardingLocation=location;
+              }
+            }
+          }else if(kind){found[kind]=true;links[kind] ||= konturDocumentUrl(config.boxId,id.MessageId,id.EntityId,type,logisticsIdFromCustomData(info.CustomData),info.MessageType);}
         }
-        const draft=drafts.find(item=>containsContainer(item.number,container));
-        if(draft){found.forwarding=true;links.forwarding=konturDocumentUrl(config.boxId,draft.messageId,draft.entityId,"LogisticsForwardingOrder");}
-        return {container,found,links};
+        const verifiedLink=verifiedForwardingUrl(forwardingLinks,container,config.boxId);
+        const linkedDocument=forwardingLinks[container];
+        if(verifiedLink&&linkedDocument?.messageId&&linkedDocument?.entityId){
+          const flow=await diadocJson(`/V5/GetDocflows?boxId=${encodeURIComponent(config.boxId)}`,accessToken,{method:"POST",body:JSON.stringify({Requests:[{DocumentId:{MessageId:linkedDocument.messageId,EntityId:linkedDocument.entityId}}]})});
+          const info=flow.Documents?.[0]?.DocumentInfo;
+          if(info?.FullVersion?.TypeNamedId==="LogisticsForwardingOrder"&&!info.IsDeleted&&info.DraftInfo?.IsRecycled!==true){found.forwarding=true;links.forwarding=verifiedLink;forwardingLocation="logistics";}
+        }
+        return {container,found,links,forwardingLocation};
       });
       response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({items}));
     }catch(error){response.writeHead(502,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({error:error.message||"Не удалось проверить документы в Диадоке"}));}})());return;
@@ -575,6 +561,7 @@ const server = http.createServer((request, response) => {
     let body="";request.setEncoding("utf8");request.on("data",chunk=>body+=chunk);request.on("end",()=>void(async()=>{try{
       const payload=JSON.parse(body);for(const key of ["orderNumber","user","signer"])if(!String(payload[key]||"").trim())throw new Error(`Не заполнено поле: ${key}`);if(!Array.isArray(payload.containers)||!payload.containers.length)throw new Error("В заказе нет контейнеров");
       const edoPreferences=loadEdoPreferences();
+      let recipientBoxId="";
       if(payload.direction==="taglex_to_carrier"){
         for(const container of payload.containers){
           const options=await sendGeneratorRequest({...payload,action:"edo_options",container,recordId:payload.containers.length===1?payload.recordId:""});
@@ -582,6 +569,9 @@ const server = http.createServer((request, response) => {
           let evidence=new Map();try{evidence=await loadSignedEdoEvidence(options.parties);}catch{}
           const carrier=decorateEdoParties(options.parties,evidence).find(party=>party.role==="carrier");
           if(carrier?.selectedId&&!edoPreferences[carrier.key])edoPreferences[carrier.key]={participantId:carrier.selectedId};
+          const boxId=carrier?.options.find(option=>option.id===carrier.selectedId)?.boxId||"";
+          if(recipientBoxId&&boxId&&recipientBoxId!==boxId)throw new Error("Для контейнеров выбраны разные ящики ЭДО перевозчика. Сформируйте отдельные поручения.");
+          recipientBoxId=boxId||recipientBoxId;
         }
       }
       const generatedData=await sendGeneratorRequest({...payload,action:"forwarding_userdata_multi",date:payload.date||new Date().toISOString().slice(0,10),edoPreferences});if(generatedData.error)throw new Error(generatedData.error);
@@ -589,7 +579,7 @@ const server = http.createServer((request, response) => {
       const generated=await fetch(generateUrl,{method:"POST",headers:{Authorization:`Bearer ${accessToken}`,"Content-Type":"application/xml; charset=utf-8"},body:generatedData.userDataXml,signal:AbortSignal.timeout(45_000)});const bytes=Buffer.from(await generated.arrayBuffer());if(!generated.ok)throw new Error(new TextDecoder().decode(bytes)||`Диадок вернул HTTP ${generated.status}`);
       const officialId=xmlAttribute(bytes.toString("utf8"),"ИдФайл");
       const filename=payload.direction==="taglex_to_carrier"&&officialId?`${officialId}.xml`:`Поручение-${String(payload.orderNumber).replace(/[^a-zа-я0-9._-]+/gi,"-")}-${new Date().toISOString().slice(0,10)}.xml`;
-      response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({filename,content:bytes.toString("base64")}));
+      response.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store"});response.end(JSON.stringify({filename,content:bytes.toString("base64"),recipientBoxId}));
     }catch(error){response.writeHead(400,{"Content-Type":"application/json; charset=utf-8"});response.end(JSON.stringify({error:error.message||"Не удалось сформировать поручение"}));}})());return;
   }
   if(request.method==="POST"&&url.pathname==="/api/kontur/forwarding-revoke/send"){

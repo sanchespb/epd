@@ -20,6 +20,8 @@ export function activeForwardingDrafts(events) {
     const info = document.DocumentInfo || {};
     if (info.MessageType !== "Draft" || info.FullVersion?.TypeNamedId !== "LogisticsForwardingOrder"
         || info.IsDeleted || !info.DraftInfo || info.DraftInfo.IsRecycled) return [];
+    const participants = info.Participants?.Participants || [];
+    if (!participants.some(participant => participant.Type === "Recipient")) return [];
     const metadata = Object.fromEntries((info.Metadata || []).map(item => [item.Key, item.Value]));
     const id = event.DocumentId || document.DocumentId;
     return [{messageId:id.MessageId, entityId:id.EntityId, number:String(metadata.DocumentNumber || "")}];

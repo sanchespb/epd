@@ -100,7 +100,7 @@
 .tripBadges{display:flex;justify-content:flex-end;gap:6px;flex:1;flex-wrap:wrap}
 .tripBadges button{padding:5px 8px;border:1px solid #b5ccd4;border-radius:8px;background:#fff;color:#285e73;font-size:10px;font-weight:700;cursor:pointer}.tripBadges button:disabled{opacity:.5;cursor:not-allowed}
 .tripBadges span{padding:6px 9px;border-radius:8px;font-size:11px;font-weight:700;white-space:nowrap}
-.tripBadgePending{background:#f2f4f5;color:#62757e}.tripBadgeReady{background:#e4f4e9;color:#1e7048}
+.tripBadgePending{background:#f2f4f5;color:#62757e}.tripBadgeReady{background:#e4f4e9;color:#1e7048}.tripBadgeError{background:#fde9e7;color:#a12d26}
 .tripCardBody{padding:18px 20px}.tripCard h3{margin:0 0 12px;font-size:17px;font-weight:600;color:#173445}
 .transportMode{margin:0 0 16px;padding:12px 14px;border:1px solid #d0e1e5;border-radius:11px;background:#f8fbfc}.transportMode legend{padding:0 5px;color:#173445;font-size:12px;font-weight:700}.transportMode>div{display:flex;gap:8px;flex-wrap:wrap}.transportMode>div label{display:inline-flex;align-items:center;gap:7px;padding:7px 11px;border:1px solid #c9dce1;border-radius:8px;background:#fff;color:#245269;font-size:12px;cursor:pointer}.transportMode input[type=radio]{accent-color:#285e73}.transportMode>small{display:block;margin-top:9px;color:#5f7884;font-size:11px}.cargoNameField{display:grid;gap:6px;max-width:520px;margin-top:12px;color:#173445;font-size:12px;font-weight:700}.cargoNameField input{width:100%;padding:9px 11px;border:1px solid #b8cfd6;border-radius:8px;background:#fff;color:#173445;font:inherit}.transportMode input:focus-visible{outline:2px solid #285e73;outline-offset:2px}
 .tripEdo{margin-bottom:17px;padding:15px;border:1px solid #d5e5e8;border-radius:12px;background:#f7fbfb}

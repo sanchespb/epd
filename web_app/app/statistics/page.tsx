@@ -39,6 +39,18 @@ export default function Statistics(){
   const totals=useMemo(()=>{const signed=selected.filter(signedFlag).length;return {total:selected.length,signed,unsigned:selected.length-signed};},[selected,audience]);
   const circumference=2*Math.PI*46,signedPercent=totals.total?Math.round(totals.signed/totals.total*100):0;
   const selectedTrips=useMemo(()=>tmsTrips.filter(item=>month==="all"||item.month===month),[tmsTrips,month]);
+  const dynamics=useMemo(()=>{
+    const periods=month==="all"?[...months].reverse():[month];
+    return periods.map(period=>{
+      if(audience==="backlog"){
+        const trips=selectedTrips.filter(item=>item.month===period);
+        return {month:period,total:trips.length,completed:trips.filter(item=>Boolean(item.etrnNumber)).length};
+      }
+      const documents=selected.filter(item=>item.month===period);
+      return {month:period,total:documents.length,completed:documents.filter(item=>audience==="consignee"?item.consigneeTitle3Signed:item.carrierTitle2Signed).length};
+    });
+  },[audience,month,months,selected,selectedTrips]);
+  const dynamicsMax=Math.max(1,...dynamics.map(item=>item.total));
   const periodName=month==="all"?"весь период с сентября 2026":monthName(month);
   const periodShort=month==="all"?"с сентября 2026":monthName(month,true);
   const entities=useMemo(()=>{const result=new Map<string,EntityRow>();for(const item of selected){const raw=(audience==="consignee"?item.consignee:item.carrier)||"Не указано",key=(audience==="consignee"?consigneeKey(raw):entityKey(raw))||"НЕУКАЗАНО",candidate=audience==="consignee"?consigneeName(raw):displayName(raw),row=result.get(key)||{key,name:candidate,aliases:new Set<string>(),total:0,signed:0,documents:[],trips:[]};row.aliases.add(raw);if(candidate.length<row.name.length)row.name=candidate;row.total++;row.documents.push(item);if(signedFlag(item))row.signed++;result.set(key,row);}return [...result.values()].sort((a,b)=>b.total-a.total||a.name.localeCompare(b.name,"ru"));},[selected,audience]);
@@ -72,9 +84,24 @@ export default function Statistics(){
     }catch(value){setError(value instanceof Error?value.message:"Не удалось выгрузить Excel");}
     finally{setExporting(false);}
   };
+  const exportDynamics=async()=>{
+    if(loading||exporting)return;
+    setExporting(true);setError("");
+    try{
+      const XLSX=await import("xlsx");
+      const rows:(string|number)[][]=[["Месяц",audience==="backlog"?"Рейсы TMS":"ЭТрН",audience==="backlog"?"Рейсы с ЭТрН":`Подписано Т${audience==="consignee"?3:2}`,audience==="backlog"?"Без ЭТрН":"Не подписано","Доля, %"]];
+      for(const item of dynamics)rows.push([monthName(item.month),item.total,item.completed,item.total-item.completed,item.total?Math.round(item.completed/item.total*100):0]);
+      const workbook=XLSX.utils.book_new(),sheet=XLSX.utils.aoa_to_sheet(rows);
+      sheet["!cols"]=[{wch:22},{wch:16},{wch:18},{wch:16},{wch:12}];
+      sheet["!autofilter"]={ref:`A1:E${rows.length}`};
+      XLSX.utils.book_append_sheet(workbook,sheet,"Динамика");
+      XLSX.writeFile(workbook,`dynamics-${audience}-${month}.xlsx`);
+    }catch(value){setError(value instanceof Error?value.message:"Не удалось выгрузить динамику");}
+    finally{setExporting(false);}
+  };
 
   return <main className={styles.shell}>
-    <header className={styles.topbar}><div style={{background:"transparent"}}><img src="/agr-logo.png" alt="Логотип АГР" width={40} height={40} style={{display:"block",objectFit:"contain"}}/></div><strong>Создание ЭПД <small>версия {appPackage.version}</small></strong><nav><a href="/workspace">Создание документов</a><a href="/forwarding-orders">Поручения клиентам</a><a href="/control">Контроль подписания</a><a className={styles.active} href="/statistics">Статистика</a><a href="/edo-settings">Настройки ID ЭДО</a></nav></header>
+    <header className={styles.topbar}><div style={{background:"transparent"}}><img src="/agr-logo.png" alt="Логотип АГР" width={40} height={40} style={{display:"block",objectFit:"contain"}}/></div><strong>Создание ЭПД <small>версия {appPackage.version}</small></strong><nav><a href="/workspace">Создание документов</a><a href="/forwarding-orders">Поручения экспедиторам</a><a href="/control">Контроль подписания</a><a className={styles.active} href="/statistics">Статистика</a><a href="/edo-settings">Настройки ID ЭДО</a></nav></header>
     <section className={styles.content}>
       <header className={styles.heading}><div><small>АНАЛИТИКА ЭТрН</small><h1>Статистика ЭТрН</h1><p>{audience==="carrier"?"Контроль подписания титула 2 перевозчиками.":audience==="consignee"?"Контроль подписания титула 3 грузополучателями после наступления даты доставки.":"Контроль рейсов TMS, для которых еще не выпущена ЭТрН."}</p></div><button onClick={()=>setRefreshKey(value=>value+1)} disabled={loading}>{loading?"Считаем…":"Обновить"}</button></header>
       {error&&<p className={styles.error}>{error}</p>}
@@ -82,6 +109,7 @@ export default function Statistics(){
       <section className={styles.monthFilter}><label><span>Период</span><select value={month} onChange={event=>{setMonth(event.target.value);setExpanded(null);}}><option value="all">Все данные с сентября 2026</option>{months.map(value=><option value={value} key={value}>{monthName(value)}</option>)}</select></label></section>
       {!error&&!loading&&<>
       <section className={styles.metrics}>{(audience==="backlog"?[{name:"Фактические рейсы TMS",value:tripTotals.total},{name:"Рейсы с ЭТрН",value:tripTotals.withEtrn},{name:"Backlog без ЭТрН",value:tripTotals.total-tripTotals.withEtrn},{name:"Покрытие рейсов",value:tripTotals.total?`${Math.round(tripTotals.withEtrn/tripTotals.total*100)}%`:"0%"}]:[{name:"ЭТрН в контроле",value:totals.total},{name:`Подписано Т${titleNumber}`,value:totals.signed},{name:audience==="carrier"?"Не подписано Т2":"Отклонения · нет Т3",value:totals.unsigned}]).map(card=><article key={card.name}><span>{card.name}</span><strong>{card.value}</strong></article>)}</section>
+      <section className={styles.dynamicsCard} aria-label="Динамика документов по месяцам"><header><div><h2>{audience==="backlog"?"Динамика рейсов и ЭТрН":"Динамика ЭТрН и подписания"}</h2><p>С сентября 2026 года · значения указаны над каждым столбцом</p></div><button type="button" onClick={()=>void exportDynamics()} disabled={exporting||loading}>{exporting?"Готовим Excel…":"Скачать динамику · Excel"}</button></header><div className={styles.dynamicsLegend}><span><i className={styles.dynamicsTotalKey}/>{audience==="backlog"?"Рейсы TMS":"ЭТрН"}</span><span><i className={styles.dynamicsDoneKey}/>{audience==="backlog"?"С ЭТрН":`Подписано Т${titleNumber}`}</span></div><div className={styles.dynamicsChart}>{dynamics.map(item=><div className={styles.dynamicsMonth} key={item.month} title={`${monthName(item.month)}: всего ${item.total}, ${audience==="backlog"?"с ЭТрН":"подписано"} ${item.completed}`}><div className={styles.dynamicsColumns}><div className={styles.dynamicsColumn}><strong>{item.total}</strong><span style={{height:`${item.total/dynamicsMax*100}%`}}/></div><div className={styles.dynamicsColumn}><strong>{item.completed}</strong><span style={{height:`${item.completed/dynamicsMax*100}%`}}/></div></div><b>{monthName(item.month,true)}</b></div>)}</div></section>
       {audience!=="backlog"&&<section className={styles.charts}>
         <article className={`${styles.chartCard} ${styles.monthTotalCard}`}><header><div><small>ОБЪЁМ</small><h2>ЭТрН за {periodName}</h2></div></header><div className={styles.singleBar}><strong>{totals.total}</strong><span><i style={{height:totals.total?"100%":"0"}}/></span><small>{periodShort}</small></div></article>
         <article className={`${styles.chartCard} ${styles.rankingCard}`}><header><div><small>РЕЙТИНГ</small><h2>{entityLabel} · титул {titleNumber}</h2></div><div className={styles.rankSwitch}><button className={rankingMode==="best"?styles.on:""} onClick={()=>setRankingMode("best")}>Топ‑5 лучших</button><button className={rankingMode==="worst"?styles.on:""} onClick={()=>setRankingMode("worst")}>Топ‑5 худших</button></div></header><div className={styles.rankBody}><div className={styles.miniDonut}><svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="46"/><circle className={styles.donutValue} cx="60" cy="60" r="46" strokeDasharray={circumference} strokeDashoffset={circumference*(1-rankingPercent/100)}/></svg><div><strong>{rankingPercent}%</strong><span>{rankingSigned} из {rankingTotal}</span></div></div><ol>{ranked.map(row=><li key={row.key}><span title={row.name}>{row.name}</span><strong><small>{row.signed} / {row.total}</small>{row.percent}%</strong></li>)}{!ranked.length&&<li>Нет данных</li>}</ol></div></article>

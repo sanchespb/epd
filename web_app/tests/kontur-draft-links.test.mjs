@@ -1,8 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { draftMessageToPost, savedDraftDocument } from "../kontur-draft.mjs";
+import { assertDraftTransferAllowed, draftMessageToPost, savedDraftDocument } from "../kontur-draft.mjs";
 import { konturDocumentUrl, logisticsIdFromCustomData, verifiedForwardingUrl } from "../kontur-document-links.mjs";
 import { activeForwardingDrafts } from "../kontur-document-presence.mjs";
+
+test("forwarding draft transfer is paused while other document kinds remain available", () => {
+  assert.throws(() => assertDraftTransferAllowed("forwarding"), /временно отключена/);
+  for (const kind of ["cargo","empty","order"]) assert.doesNotThrow(() => assertDraftTransferAllowed(kind));
+});
 
 test("forwarding draft includes recipient and enables strict validation", () => {
   const message = draftMessageToPost({fromBoxId:"sender",recipientBoxId:"carrier@diadoc.ru",kind:"forwarding",content:"xml",format:{TypeNamedId:"LogisticsForwardingOrder"}});

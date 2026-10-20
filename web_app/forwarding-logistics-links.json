@@ -3,5 +3,10 @@
     "url": "https://logist.kontur.ru/6ef1b74b-c3c3-4111-8868-72b57910faa4/consignor/sign/forwardingOrder/150e2b6e-f56f-42cb-85d6-24db41c92a49",
     "messageId": "95376746-0b9e-45d3-8bfb-c62aa4b2879f",
     "entityId": "8c3ea8ad-5cce-4026-a589-e37afcb362cd"
+  },
+  "CICU7424162": {
+    "url": "https://logist.kontur.ru/6ef1b74b-c3c3-4111-8868-72b57910faa4/consignor/sign/forwardingOrder/54f782ca-6866-45ec-bcfb-15eb05572419",
+    "messageId": "678f72b5-ccd8-47c2-828d-21d66cac968c",
+    "entityId": "e2332c2b-2a33-4eb0-9dc4-e0367baa12d8"
   }
 }

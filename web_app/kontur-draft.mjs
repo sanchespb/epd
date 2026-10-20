@@ -1,3 +1,9 @@
+export const forwardingDraftDisabledMessage = "Автоматическая передача поручений в Контур временно отключена: документы могут не пройти обработку в Контур.Логистике. Скачайте XML и загрузите его вручную.";
+
+export function assertDraftTransferAllowed(kind) {
+  if (kind === "forwarding") throw new Error(forwardingDraftDisabledMessage);
+}
+
 export function draftMessageToPost({fromBoxId, recipientBoxId, kind, content, format}) {
   if (kind === "forwarding" && !recipientBoxId) {
     throw new Error("Для поручения не найден ящик ЭДО перевозчика. Обновите справочник ЭДО и проверьте выбранный ID.");

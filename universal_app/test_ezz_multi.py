@@ -34,9 +34,13 @@ class MultiOrderTests(unittest.TestCase):
         _, content = ServerGenerator(Path(__file__).parent / "resources", Catalogs()).ezz_multi([self.first, self.second])
         self.assertEqual(len(ET.fromstring(content).findall(".//СодИнфГО/ОпГруз")), 2)
 
-    def test_different_vehicle_submission_times_are_rejected(self):
+    def test_different_vehicle_submission_times_on_same_day_are_accepted(self):
         second = {**self.second, "planned_departure_datetime": self.first["planned_departure_datetime"] + timedelta(hours=1)}
-        with self.assertRaisesRegex(ValueError, "дата или время подачи ТС"):
+        ServerGenerator.validate_ezz_group([self.first, second])
+
+    def test_different_vehicle_submission_dates_are_rejected(self):
+        second = {**self.second, "planned_departure_datetime": self.first["planned_departure_datetime"] + timedelta(days=1)}
+        with self.assertRaisesRegex(ValueError, "дата подачи ТС"):
             ServerGenerator.validate_ezz_group([self.first, second])
 
     def test_route_mismatch_is_rejected(self):

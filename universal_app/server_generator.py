@@ -123,7 +123,7 @@ class Generator(BaseGenerator):
             "перевозчик": lambda c: (c["carrier"].get("inn"), c["carrier_edo"]),
             "заказчик": lambda c: (c["client"].get("inn"), c["client_edo"]),
             "маршрут и адреса": lambda c: (c["loading"], c["delivery"]),
-            "дата или время подачи ТС": lambda c: c["planned_departure_datetime"],
+            "дата подачи ТС": lambda c: c["planned_departure_datetime"].date(),
             "договор с перевозчиком": lambda c: c.get("carrier_contract"),
             "владелец пункта погрузки": lambda c: c.get("loading_owner"),
             "тип перевозки": lambda c: c.get("transport_mode"),

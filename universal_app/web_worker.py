@@ -241,8 +241,9 @@ def handle(request):
                 resolved_auto = dict(auto) if auto else None
                 truck_number = clean(value(resolved_auto or {}, "Номер автомашины", "Транспортное средство"))
                 trailer_number = clean(value(resolved_auto or {}, "Номер прицепа"))
-                vehicle_matches = catalogs.vehicle_matches(truck_number)
-                vehicle = catalogs.vehicle(truck_number) or {}
+                carrier_name = clean(value(resolved_auto or {}, "Исполнитель", "Партнер", "Перевозчик"))
+                vehicle_matches = catalogs.vehicle_matches(truck_number, carrier_name)
+                vehicle = catalogs.vehicle(truck_number, carrier_name) or {}
                 ownership = vehicle_ownership_kind(vehicle.get("Тип владения"))
                 ownership_issue = ("Несколько карточек ТС с разным или неуказанным типом владения" if len(vehicle_matches) > 1 and not ownership
                                    else "Тип владения ТС не указан в справочнике" if truck_number and not ownership else "")

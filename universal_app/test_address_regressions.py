@@ -11,6 +11,27 @@ from manual_corrections import prepare_manual_fields
 
 
 class AddressRegressions(unittest.TestCase):
+    def test_spousal_ownership_is_selected_for_the_trip_carrier(self):
+        from data_sources import vehicle_ownership_kind
+        catalogs = Catalogs()
+        catalogs.vehicles = [
+            {"Государственный номер":"Е670РС198","Автоперевозчик":'ООО "Локом"',"Тип владения":"Аренда"},
+            {"Государственный номер":"Е670РС198","Автоперевозчик":"ИП ПАСИШНИК СЕРГЕЙ ИВАНОВИЧ","Тип владения":"Совместная собственность супругов"},
+        ]
+        vehicle = catalogs.vehicle("E670PC198","ПАСИШНИК СЕРГЕЙ ИВАНОВИЧ")
+        self.assertEqual(vehicle["Тип владения"],"Совместная собственность супругов")
+        self.assertEqual(vehicle_ownership_kind(vehicle["Тип владения"]),"Совместная собственность супругов")
+        self.assertEqual(vehicle_ownership_kind("2"),"Совместная собственность супругов")
+        generator = Generator(Path(__file__).parent / "resources", catalogs)
+        ctx = generator.context({"_container":"TEST1234567","Исполнитель":"ИП ПАСИШНИК СЕРГЕЙ ИВАНОВИЧ","Номер автомашины":"Е670РС198","Номер прицепа":"АВ123478"}, date(2026,11,19), "Иванов Иван Иванович", None)
+        _, content = generator.etrn(ctx)
+        root = ET.fromstring(content)
+        self.assertEqual(root.find(".//СвТС/ТС").get("ТипВлад"),"2")
+        self.assertEqual(root.find(".//СвТС/Прицеп").get("ТипВлад"),"2")
+        self.assertIsNone(root.find(".//СвТС/ТС/ОснАрЛиз"))
+        self.assertIsNone(catalogs.vehicle("Е670РС198","Другой перевозчик"))
+        self.assertEqual(catalogs.vehicle("Е670РС198","Локом")["Тип владения"],"Аренда")
+
     def test_duplicate_vehicle_cards_preserve_shared_rental_without_guessing_contract(self):
         catalogs = Catalogs()
         catalogs.vehicles = [

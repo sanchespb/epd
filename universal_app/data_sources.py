@@ -41,6 +41,8 @@ def normalize_vehicle_registration(value) -> str:
 
 def vehicle_ownership_kind(value) -> str:
     kind = clean(value).upper().replace("Ё", "Е")
+    if kind == "2" or ("СОВМЕСТН" in kind and "СУПРУГ" in kind):
+        return "Совместная собственность супругов"
     if "АРЕНД" in kind or kind == "3":
         return "Аренда"
     if "ЛИЗИНГ" in kind or kind == "4":
@@ -268,12 +270,20 @@ class Catalogs:
 
         return max(carrier_matches, key=rank)
 
-    def vehicle_matches(self, number: str) -> list[dict]:
+    def vehicle_matches(self, number: str, carrier_name: str = "") -> list[dict]:
         key = normalize_vehicle_registration(number)
-        return [row for row in self.vehicles if key and normalize_vehicle_registration(row.get("Государственный номер")) == key]
+        matches = [row for row in self.vehicles if key and normalize_vehicle_registration(row.get("Государственный номер")) == key]
+        if carrier_name:
+            carrier_key = normalize_name(carrier_name)
+            scoped = [row for row in matches if normalize_name(row.get("Автоперевозчик")) == carrier_key]
+            if scoped:
+                return scoped
+            if any(clean(row.get("Автоперевозчик")) for row in matches):
+                return []
+        return matches
 
-    def vehicle(self, number: str) -> dict | None:
-        matches = self.vehicle_matches(number)
+    def vehicle(self, number: str, carrier_name: str = "") -> dict | None:
+        matches = self.vehicle_matches(number, carrier_name)
         if len(matches) == 1:
             return matches[0]
         if not matches:

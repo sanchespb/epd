@@ -32,7 +32,7 @@ def prepare_manual_fields(ctx, kind, stored=None, submitted=None):
         if truck:
             vehicle = ctx.get("truck_vehicle") or {}
             ctx["truck_vehicle"] = vehicle
-            add("vehicle.ownership", "Тип владения тягачом", vehicle_scope, "ownership", vehicle_ownership_kind(vehicle.get("Тип владения")), lambda v: vehicle.__setitem__("Тип владения", vehicle_ownership_kind(v)), lambda v: v.casefold() in {"собственность", "аренда", "лизинг"}, "Собственность, Аренда или Лизинг")
+            add("vehicle.ownership", "Тип владения тягачом", vehicle_scope, "ownership", vehicle_ownership_kind(vehicle.get("Тип владения")), lambda v: vehicle.__setitem__("Тип владения", vehicle_ownership_kind(v)), lambda v: v.casefold() in {"собственность", "совместная собственность супругов", "аренда", "лизинг"}, "Собственность, Совместная собственность супругов, Аренда или Лизинг")
         ownership = vehicle_ownership_details(ctx.get("truck_vehicle") or {})
         if ownership:
             vehicle = ctx["truck_vehicle"]

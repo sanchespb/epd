@@ -11,6 +11,12 @@ from manual_corrections import prepare_manual_fields
 
 
 class AddressRegressions(unittest.TestCase):
+    def test_petro_house_is_not_repeated_in_street(self):
+        attrs = address_attributes("196624, г. Санкт-Петербург, п. Шушары, Московское шоссе д. 153")
+        self.assertEqual(attrs["Улица"], "Московское шоссе")
+        self.assertEqual(attrs["Дом"], "153")
+        self.assertEqual(attrs["Индекс"], "196624")
+
     def test_spousal_ownership_is_selected_for_the_trip_carrier(self):
         from data_sources import vehicle_ownership_kind
         catalogs = Catalogs()

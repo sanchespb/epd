@@ -327,6 +327,10 @@ def address_attributes(text: str) -> dict:
     else:
         street = re.sub(r"(?<!\d)\d{6}(?!\d)", "", text).strip(" ,")
     street_part = next((part for part in parts if re.search(r'(?:^|\s)(?:ул(?:ица)?\.?|ш(?:оссе)?\.?|пр-кт|проспект|пр-д|проезд|пер(?:еулок)?\.?|квартал)(?:\s|$)', part, re.I)), '')
+    if street_part and attrs.get("Дом"):
+        house_match = re.search(ADDRESS_PART_PATTERNS["Дом"], street_part, re.IGNORECASE)
+        if house_match and clean(house_match.group(1)) == attrs["Дом"]:
+            street_part = street_part[:house_match.start()].strip(" ,;")
     if street_part and len(street_part) <= 50:
         attrs['Улица'] = street_part
         kilometer_part = next((part for part in parts if re.search(r'\b\d+\s*-?й\s+километр\b', part, re.I)), '')
